@@ -7,10 +7,10 @@
   "icon": "assets/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourname/ds-autocomplete"
+    "url": "https://github.com/heshuren371/ds-autocomplete"
   },
   "bugs": {
-    "url": "https://github.com/yourname/ds-autocomplete/issues"
+    "url": "https://github.com/heshuren371/ds-autocomplete/issues"
   },
   "license": "MIT",
   "engines": {

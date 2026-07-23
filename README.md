@@ -14,26 +14,8 @@
 
 ## 安装
 
-### 方式一：VS Code 扩展市场（推荐）
-
-1. 打开 VS Code → 扩展面板（`Cmd+Shift+X`）
-2. 搜索 `DS Autocomplete`
-3. 点击安装
-
-### 方式二：从 VSIX 手动安装
-
 ```bash
-# 下载 ds-autocomplete-x.x.x.vsix
-code --install-extension ds-autocomplete-1.0.0.vsix
-```
-
-### 方式三：源码安装
-
-```bash
-git clone <repo-url>
-cd ds-autocomplete
-ln -sf $(pwd) ~/.vscode/extensions/local.ds-autocomplete-1.0.0
-# 重启 VS Code
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.0.0.vsix
 ```
 
 ## 使用
