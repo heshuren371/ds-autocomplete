@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -43,8 +43,8 @@
       "properties": {
         "dsAutocomplete.apiKey": {
           "type": "string",
-          "default": "sk-8c978316ab62491da981926545253df0",
-          "description": "DeepSeek API key"
+          "default": "",
+          "description": "DeepSeek API key. Get one at https://platform.deepseek.com"
         },
         "dsAutocomplete.model": {
           "type": "string",

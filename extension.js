@@ -494,14 +494,32 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.1.0 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.1.1 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.1.0 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.1.1 activated — ${langs.join(", ")}`);
+
+  // No API key? Prompt once
+  if (!config().get("apiKey")) {
+    vscode.window
+      .showWarningMessage(
+        "DS Autocomplete: 未配置 API key。请先获取 DeepSeek API 密钥。",
+        "获取 Key",
+        "打开设置"
+      )
+      .then((choice) => {
+        if (choice === "获取 Key") {
+          vscode.env.openExternal(vscode.Uri.parse("https://platform.deepseek.com/api_keys"));
+        } else if (choice === "打开设置") {
+          vscode.commands.executeCommand("workbench.action.openSettings", "dsAutocomplete.apiKey");
+        }
+      });
+  }
+
   showStatus("DS ready", "$(check)", 3000);
 }
 
