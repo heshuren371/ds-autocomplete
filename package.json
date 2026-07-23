@@ -1,0 +1,161 @@
+{
+  "name": "ds-autocomplete",
+  "displayName": "DS Autocomplete",
+  "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
+  "version": "1.0.0",
+  "publisher": "local",
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourname/ds-autocomplete"
+  },
+  "bugs": {
+    "url": "https://github.com/yourname/ds-autocomplete/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "autocomplete",
+    "ai",
+    "deepseek",
+    "fim",
+    "code completion",
+    "inline completion",
+    "copilot alternative",
+    "中文",
+    "deepseek-autocomplete",
+    "vscode-autocomplete"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "DS Autocomplete",
+      "properties": {
+        "dsAutocomplete.apiKey": {
+          "type": "string",
+          "default": "sk-8c978316ab62491da981926545253df0",
+          "description": "DeepSeek API key"
+        },
+        "dsAutocomplete.model": {
+          "type": "string",
+          "default": "deepseek-v4-flash",
+          "enum": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-coder"
+          ],
+          "description": "Model for FIM completions"
+        },
+        "dsAutocomplete.apiBase": {
+          "type": "string",
+          "default": "https://api.deepseek.com/beta/completions",
+          "description": "API endpoint URL"
+        },
+        "dsAutocomplete.maxTokens": {
+          "type": "number",
+          "default": 80,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "Max tokens per completion request"
+        },
+        "dsAutocomplete.temperature": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Sampling temperature (0 = deterministic)"
+        },
+        "dsAutocomplete.debounceMs": {
+          "type": "number",
+          "default": 350,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "Debounce delay in milliseconds"
+        },
+        "dsAutocomplete.requestTimeoutMs": {
+          "type": "number",
+          "default": 12000,
+          "minimum": 3000,
+          "maximum": 30000,
+          "description": "API request timeout in milliseconds"
+        },
+        "dsAutocomplete.multiLine": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable multi-line completions"
+        },
+        "dsAutocomplete.multiLineMode": {
+          "type": "string",
+          "default": "always",
+          "enum": ["always", "auto", "never"],
+          "description": "Multi-line completion strategy"
+        },
+        "dsAutocomplete.replacePartialWord": {
+          "type": "boolean",
+          "default": true,
+          "description": "Replace the partial word at cursor with completion"
+        },
+        "dsAutocomplete.triggerOnExplicit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also trigger on explicit request (Ctrl+Space)"
+        },
+        "dsAutocomplete.maxPrefixChars": {
+          "type": "number",
+          "default": 3000,
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Max prefix characters sent to model"
+        },
+        "dsAutocomplete.maxSuffixChars": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Max suffix characters sent to model"
+        },
+        "dsAutocomplete.stopTokens": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" },
+          "description": "Additional stop sequences for the model"
+        },
+        "dsAutocomplete.enabledLanguages": {
+          "type": "array",
+          "default": [
+            "python",
+            "javascript",
+            "typescript",
+            "go",
+            "rust",
+            "java",
+            "c",
+            "cpp"
+          ],
+          "items": { "type": "string" },
+          "description": "Languages where autocomplete is active"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "dsAutocomplete.switchModel",
+        "title": "DS Autocomplete: Switch Model"
+      },
+      {
+        "command": "dsAutocomplete.showStats",
+        "title": "DS Autocomplete: Show Info"
+      }
+    ]
+  }
+}
