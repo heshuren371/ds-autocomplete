@@ -30,7 +30,27 @@ code --install-extension https://github.com/heshuren371/ds-autocomplete/releases
 
 安装完成后重新加载 VSCode（`Cmd+Shift+P` → `Reload Window`），或直接重启 VSCode。
 
-> ⚠️ 首次使用前请确认右下角状态栏显示 `DS V4 Flash`。如果没有，检查你是否已有 DeepSeek API 账户和 key。
+## 配置 API Key
+
+扩展安装后需要填入你自己的 DeepSeek API 密钥才能工作。两种方式：
+
+### 方式一：设置面板（推荐）
+
+1. 打开 VSCode 设置：`Cmd+,`
+2. 搜索 `dsAutocomplete`
+3. 找到 **Api Key** 一栏，粘贴你的 key（以 `sk-` 开头）
+4. 即时生效
+
+### 方式二：启动弹窗引导
+
+如果还没配置 key，扩展启动时会自动弹窗提示，提供两个按钮：
+
+- **获取 Key** → 跳转 [DeepSeek API Keys 页面](https://platform.deepseek.com/api_keys)
+- **打开设置** → 直达 `dsAutocomplete.apiKey` 配置项
+
+> ⚠️ 没有 API key？去 [platform.deepseek.com](https://platform.deepseek.com) 注册账户 → 充值 → 创建 API Key。首次注册通常有赠送额度。
+
+配置完成后确认右下角状态栏显示 `DS V4 Flash`，即表示正常工作。
 
 ---
 
