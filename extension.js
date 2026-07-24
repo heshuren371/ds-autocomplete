@@ -162,13 +162,68 @@ function shouldSkip(document, position) {
 }
 
 // ── FIM prompt ───────────────────────────────────────────────────────
+// Professional inline completions (PyCharm/Cursor/Copilot) don't just
+// send raw text around cursor. They include file-level context:
+//   - File path + language annotation
+//   - Import statements (model needs to know available symbols)
+//   - Natural boundary alignment (start at function/class def, not mid-word)
+
+const path = require("path");
+
+function buildContextHeader(document) {
+  const filename = document.uri.fsPath
+    ? path.basename(document.uri.fsPath)
+    : document.uri.toString().split("/").pop();
+  return `# ${filename}\n`;
+}
+
+function extractImports(document) {
+  const lines = document.getText().split("\n");
+  const imports = [];
+  for (let i = 0; i < Math.min(lines.length, 40); i++) {
+    const line = lines[i].trim();
+    if (line.startsWith("import ") || line.startsWith("from ")) {
+      imports.push(line);
+    } else if (imports.length > 0 && line.length === 0) {
+      continue; // blank lines within import section
+    } else if (imports.length > 0 && !line.startsWith("#")) {
+      break; // first non-import, non-comment line ends the section
+    }
+  }
+  return imports.length > 0 ? imports.join("\n") + "\n\n" : "";
+}
+
+function findPrefixBoundary(text, offset, maxChars) {
+  const rawStart = Math.max(0, offset - maxChars);
+  // Try to align to the start of the current function or class
+  const before = text.slice(0, offset);
+  const lines = before.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^(def |class |async def |@)/.test(lines[i].trim())) {
+      const pos = before.lastIndexOf(lines[i]);
+      if (pos >= rawStart) return pos;
+      return rawStart;
+    }
+  }
+  return rawStart;
+}
 
 function buildFIM(document, position) {
   const cfg = config();
   const full = document.getText();
   const offset = document.offsetAt(position);
-  const prefix = full.slice(Math.max(0, offset - cfg.get("maxPrefixChars")), offset);
+
+  const header = buildContextHeader(document);
+  const imports = extractImports(document);
+  const overhead = header.length + imports.length;
+
+  const maxPrefix = cfg.get("maxPrefixChars");
+  const prefixStart = findPrefixBoundary(full, offset, maxPrefix - overhead);
+  const rawPrefix = full.slice(prefixStart, offset);
+  // Truncate prefix so total stays within maxPrefixChars
+  const prefix = (header + imports + rawPrefix).slice(-maxPrefix);
   const suffix = full.slice(offset, offset + cfg.get("maxSuffixChars"));
+
   return { prompt: prefix, suffix: suffix };
 }
 
@@ -741,7 +796,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.5.0 activated, debug logging on");
+  dbg("v1.5.1 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -899,14 +954,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.5.0 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.5.1 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.5.0 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.5.1 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
