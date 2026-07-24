@@ -281,6 +281,7 @@ function requestFIM(prompt, suffix, cancelToken) {
     let done = false;
     let accumulated = "";
     let buffer = "";
+    let tokenCount = 0;
 
     const finish = (value, isError) => {
       if (done) return;
@@ -337,6 +338,24 @@ function requestFIM(prompt, suffix, cancelToken) {
               const delta = j.choices?.[0]?.text ?? "";
               if (delta) {
                 accumulated += delta;
+                tokenCount++;
+
+                // Early resolve — show ghost text as soon as we have
+                // enough to be useful. Copilot/Cursor prioritize speed
+                // over completion completeness. 5 tokens for single-line,
+                // 8 for multi-line.
+                const minTokens = multiLine ? 8 : 5;
+                if (tokenCount >= minTokens && accumulated.trim().length > 0) {
+                  const trimmed = accumulated.trim();
+                  // Resolve at a word boundary for cleaner partial results
+                  const boundary = /[)\]}'"\s,;]$/;
+                  if (boundary.test(trimmed) || trimmed.endsWith(":") || trimmed.endsWith(" ")) {
+                    req.destroy();
+                    finish(trimmed, false);
+                    return;
+                  }
+                }
+
                 // Early exit: we have enough, kill the stream (saves server-side generation)
                 if (multiLine && accumulated.endsWith("\n\n")) {
                   req.destroy();
@@ -796,7 +815,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.5.1 activated, debug logging on");
+  dbg("v1.5.2 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -954,14 +973,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.5.1 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.5.2 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.5.1 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.5.2 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
