@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.5.4",
+  "version": "1.5.5",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -135,7 +135,7 @@
         },
         "dsAutocomplete.maxPrefixChars": {
           "type": "number",
-          "default": 3000,
+          "default": 2000,
           "minimum": 500,
           "maximum": 10000,
           "description": "Max prefix characters sent to model"

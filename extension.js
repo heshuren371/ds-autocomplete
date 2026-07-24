@@ -16,8 +16,9 @@ function outputChannel() {
   if (!_output) _output = vscode.window.createOutputChannel("DS Autocomplete");
   return _output;
 }
+let _debugEnabled = false; // cached copy, updated on config change
 function dbg(msg) {
-  if (!config().get("debug")) return;
+  if (!_debugEnabled) return;
   const now = Date.now();
   if (msg === _lastDbgMsg && now - _lastDbgTime < 2000) return;
   _lastDbgMsg = msg;
@@ -152,13 +153,61 @@ function shouldSkip(document, position) {
   // wanted completions, so this filter is OFF by default.
   if (config().get("skipInString")) {
     const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
-    const singles = (linePrefix.match(/'/g) || []).length;
-    const doubles = (linePrefix.match(/"/g) || []).length;
-    const backticks = (linePrefix.match(/`/g) || []).length;
+    const singles = (linePrefix.match(RE_SINGLE_QUOTE) || []).length;
+    const doubles = (linePrefix.match(RE_DOUBLE_QUOTE) || []).length;
+    const backticks = (linePrefix.match(RE_BACKTICK) || []).length;
     if (singles % 2 === 1 || doubles % 2 === 1 || backticks % 2 === 1) return true;
   }
 
   return false;
+}
+
+// ── Compiled regex (module scope — avoid recompiling on every call) ──
+
+const RE_FIM_END = /<｜fim▁end｜>/g;
+const RE_FIM_BEGIN = /<｜fim▁begin｜>/g;
+const RE_EOF = /<\|endoftext\|>/g;
+const RE_MARKDOWN_FENCE = /```[a-z]*\n?/g;
+const RE_MULTIBLANK = /\n{3,}/g;
+const RE_FUNC_START = /^(def |class |async def |@)/;
+const RE_SINGLE_QUOTE = /'/g;
+const RE_DOUBLE_QUOTE = /"/g;
+const RE_BACKTICK = /`/g;
+const RE_EARLY_BOUNDARY = /[)\]}'"\s,;]$/;
+const RE_DOUBLENEWLINE_END = /\n\n$/;
+const RE_WHITESPACE_WORD = /^\s*\S+/;
+
+// ── Document cache (avoid import scanning on every keystroke) ───────
+// VSCode's document.getText() is already cheap (native); imports scanning
+// with split() is the expensive part. Cache imports per (uri, version).
+
+let _importCache = { uri: "", version: -1, imports: "" };
+
+function getCachedImports(document) {
+  const uri = document.uri.toString();
+  if (_importCache.uri === uri && _importCache.version === document.version) {
+    return _importCache.imports;
+  }
+  _importCache.uri = uri;
+  _importCache.version = document.version;
+  _importCache.imports = extractImportsFast(document.getText());
+  return _importCache.imports;
+}
+
+function extractImportsFast(text) {
+  const lines = text.split("\n");
+  const imports = [];
+  for (let i = 0; i < Math.min(lines.length, 40); i++) {
+    const line = lines[i].trim();
+    if (line.startsWith("import ") || line.startsWith("from ")) {
+      imports.push(line);
+    } else if (imports.length > 0 && line.length === 0) {
+      continue;
+    } else if (imports.length > 0 && !line.startsWith("#")) {
+      break;
+    }
+  }
+  return imports.length > 0 ? imports.join("\n") + "\n\n" : "";
 }
 
 // ── FIM prompt ───────────────────────────────────────────────────────
@@ -199,7 +248,7 @@ function findPrefixBoundary(text, offset, maxChars) {
   const before = text.slice(0, offset);
   const lines = before.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (/^(def |class |async def |@)/.test(lines[i].trim())) {
+    if (RE_FUNC_START.test(lines[i].trim())) {
       const pos = before.lastIndexOf(lines[i]);
       if (pos >= rawStart) return pos;
       return rawStart;
@@ -214,15 +263,22 @@ function buildFIM(document, position) {
   const offset = document.offsetAt(position);
 
   const header = buildContextHeader(document);
-  const imports = extractImports(document);
+  const imports = getCachedImports(document);
   const overhead = header.length + imports.length;
 
-  const maxPrefix = cfg.get("maxPrefixChars");
+  // Single-line: only need current-line context (token efficiency)
+  const multiLine = cfg.get("multiLine");
+  const maxPrefix = multiLine
+    ? cfg.get("maxPrefixChars")
+    : Math.min(cfg.get("maxPrefixChars"), 800);
+  const maxSuffix = multiLine
+    ? cfg.get("maxSuffixChars")
+    : Math.min(cfg.get("maxSuffixChars"), 200);
+
   const prefixStart = findPrefixBoundary(full, offset, maxPrefix - overhead);
   const rawPrefix = full.slice(prefixStart, offset);
-  // Truncate prefix so total stays within maxPrefixChars
   const prefix = (header + imports + rawPrefix).slice(-maxPrefix);
-  const suffix = full.slice(offset, offset + cfg.get("maxSuffixChars"));
+  const suffix = full.slice(offset, offset + maxSuffix);
 
   return { prompt: prefix, suffix: suffix };
 }
@@ -231,11 +287,11 @@ function buildFIM(document, position) {
 
 function cleanCompletion(text, multiLine) {
   let cleaned = text
-    .replace(/<｜fim▁end｜>/g, "")
-    .replace(/<｜fim▁begin｜>/g, "")
-    .replace(/<\|endoftext\|>/g, "")
-    .replace(/```[a-z]*\n?/g, "")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(RE_FIM_END, "")
+    .replace(RE_FIM_BEGIN, "")
+    .replace(RE_EOF, "")
+    .replace(RE_MARKDOWN_FENCE, "")
+    .replace(RE_MULTIBLANK, "\n\n")
     .trimEnd();
   if (!multiLine) {
     cleaned = cleaned.split("\n")[0].trimEnd();
@@ -348,7 +404,7 @@ function requestFIM(prompt, suffix, cancelToken) {
                 if (tokenCount >= minTokens && accumulated.trim().length > 0) {
                   const trimmed = accumulated.trim();
                   // Resolve at a word boundary for cleaner partial results
-                  const boundary = /[)\]}'"\s,;]$/;
+                  const boundary = RE_EARLY_BOUNDARY;
                   if (boundary.test(trimmed) || trimmed.endsWith(":") || trimmed.endsWith(" ")) {
                     req.destroy();
                     finish(trimmed, false);
@@ -359,7 +415,7 @@ function requestFIM(prompt, suffix, cancelToken) {
                 // Early exit: we have enough, kill the stream (saves server-side generation)
                 if (multiLine && accumulated.endsWith("\n\n")) {
                   req.destroy();
-                  finish(accumulated.replace(/\n\n$/, "\n"), false);
+                  finish(accumulated.replace(RE_DOUBLENEWLINE_END, "\n"), false);
                   return;
                 }
                 if (!multiLine && accumulated.includes("\n")) {
@@ -834,11 +890,12 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.5.4 activated, debug logging on");
+  dbg("v1.5.5 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
-        if (config().get("debug")) {
+        _debugEnabled = config().get("debug");
+        if (_debugEnabled) {
           dbg("debug logging ENABLED via settings change");
         } else {
           outputChannel().appendLine("[debug] logging DISABLED via settings change");
@@ -943,7 +1000,7 @@ function activate(context) {
         return;
       }
       const full = _lastSuggestion.text;
-      const m = full.match(/^\s*\S+/);
+      const m = full.match(RE_WHITESPACE_WORD);
       const word = m ? m[0] : full;
       const after = full.slice(word.length);
       const trailingSpace = after.startsWith(" ") ? " " : "";
@@ -1001,14 +1058,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.5.4 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.5.5 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.5.4 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.5.5 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {

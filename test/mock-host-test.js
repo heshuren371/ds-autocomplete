@@ -46,6 +46,7 @@ class FakeDocument {
     this.text = text;
     this.languageId = lang;
     this.uri = { toString: () => "file:///test." + lang };
+    this.version = 0;
   }
   getText(range) {
     if (!range) return this.text;
