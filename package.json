@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.5.5",
+  "version": "1.6.0",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -99,6 +99,11 @@
           "type": "boolean",
           "default": true,
           "description": "Enable multi-line completions"
+        },
+        "dsAutocomplete.commentToCode": {
+          "type": "boolean",
+          "default": true,
+          "description": "When cursor follows a comment, use chat/completions to generate implementation based on comment instructions"
         },
         "dsAutocomplete.multiLineMode": {
           "type": "string",

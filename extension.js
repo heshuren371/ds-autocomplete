@@ -210,6 +210,43 @@ function extractImportsFast(text) {
   return imports.length > 0 ? imports.join("\n") + "\n\n" : "";
 }
 
+// ── Comment-to-code mode (Copilot Next Edit Suggestion) ──────────────
+// When cursor follows a comment block, switch from FIM to chat/completions.
+// The model interprets comments as implementation instructions.
+
+function isCommentBlock(document, position) {
+  const cfg = config();
+  if (!cfg.get("commentToCode")) return false;
+  if (!cfg.get("multiLine")) return false;
+
+  const line = document.lineAt(position.line).text;
+  const trimmed = line.slice(0, position.character).trim();
+
+  // Cursor on an empty line after a comment → generate implementation
+  if (trimmed.length === 0) {
+    if (position.line > 0) {
+      const prev = document.lineAt(position.line - 1).text.trim();
+      if (prev.startsWith("#") || prev.startsWith('"""') || prev.startsWith("'''")) {
+        return true;
+      }
+    }
+    if (position.line === 0) return false;
+    // Cursor at first column on a blank line after comment block
+    return false;
+  }
+
+  // Cursor on a comment line → generate the next line of code
+  if (trimmed.startsWith("#")) return true;
+
+  // Cursor right after a comment line → e.g. "# 功能: xxx" + newline + "|"
+  if (position.line > 0 && position.character === 0) {
+    const prev = document.lineAt(position.line - 1).text.trim();
+    if (prev.startsWith("#")) return true;
+  }
+
+  return false;
+}
+
 // ── FIM prompt ───────────────────────────────────────────────────────
 // Professional inline completions (PyCharm/Cursor/Copilot) don't just
 // send raw text around cursor. They include file-level context:
@@ -447,6 +484,120 @@ function requestFIM(prompt, suffix, cancelToken) {
       });
     }
 
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── Chat API for comment-to-code (Copilot Next Edit Suggestion) ───────
+// When the cursor follows a comment block, switch from FIM to chat/completions.
+// The model interprets comments as implementation instructions.
+
+function requestCommentToCode(document, position, cancelToken) {
+  const cfg = config();
+  const key = cfg.get("apiKey");
+  if (!key) return Promise.reject(new Error("No API key"));
+
+  const full = document.getText();
+  const offset = document.offsetAt(position);
+
+  // Collect the comment block above the cursor as instructions
+  const lines = full.slice(0, offset).split("\n");
+  let commentStart = lines.length - 1;
+  while (commentStart >= 0 && lines[commentStart].trim().startsWith("#")) {
+    commentStart--;
+  }
+  commentStart++; // back to first comment line
+  const instruction = lines.slice(commentStart).join("\n").trim();
+  const preceding = lines.slice(0, commentStart).join("\n");
+
+  const systemMsg = `You are a Python code generator. Implement the task described in the comments. Output ONLY the implementation code — no markdown fences, no explanations.`;
+  const userMsg = `FILE CONTEXT:\n${preceding}\n\nTASK (from comments):\n${instruction}\n\nImplement the code:`;
+
+  const body = JSON.stringify({
+    model: cfg.get("model"),
+    messages: [
+      { role: "system", content: systemMsg },
+      { role: "user", content: userMsg },
+    ],
+    stream: true,
+    max_tokens: cfg.get("multiLine") ? 800 : 400,
+    temperature: 0,
+    stop: ["\n\n\n"],
+  });
+
+  statBump("requests");
+
+  return new Promise((resolve, reject) => {
+    let done = false;
+    let accumulated = "";
+    let buffer = "";
+
+    const finish = (value, isError) => {
+      if (done) return;
+      done = true;
+      if (isError) reject(value);
+      else resolve(value);
+    };
+
+    const chatBase = cfg.get("apiBase").replace("/beta/completions", "");
+
+    const req = https.request(
+      chatBase,
+      {
+        method: "POST",
+        path: "/v1/chat/completions",
+        headers: {
+          Authorization: "Bearer " + key,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          Accept: "text/event-stream",
+        },
+        timeout: cfg.get("requestTimeoutMs"),
+      },
+      (res) => {
+        if (res.statusCode !== 200) {
+          let errData = "";
+          res.on("data", (c) => (errData += c));
+          res.on("end", () => {
+            let msg = `HTTP ${res.statusCode}`;
+            try { msg = JSON.parse(errData).error?.message || msg; } catch {}
+            finish(new Error(msg), true);
+          });
+          return;
+        }
+        res.on("data", (chunk) => {
+          if (done) return;
+          buffer += chunk.toString();
+          let idx;
+          while ((idx = buffer.indexOf("\n\n")) >= 0) {
+            const event = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const line = event.split("\n").find((l) => l.startsWith("data: "));
+            if (!line) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") { finish(accumulated, false); return; }
+            try {
+              const j = JSON.parse(payload);
+              const delta = j.choices?.[0]?.delta?.content ?? "";
+              accumulated += delta;
+              // Stop at a natural break
+              if (accumulated.includes("\n\n\n")) {
+                finish(accumulated.replace(/\n\n\n.*$/s, ""), false);
+                return;
+              }
+            } catch {}
+          }
+        });
+        res.on("end", () => finish(accumulated, false));
+        res.on("error", (e) => finish(e, true));
+      }
+    );
+    req.on("error", (e) => finish(e, true));
+    req.on("timeout", () => { req.destroy(); finish(new Error("timeout"), true); });
+    if (cancelToken) {
+      cancelToken.onCancellationRequested(() => { req.destroy(); finish(null, false); });
+    }
     req.write(body);
     req.end();
   });
@@ -774,6 +925,32 @@ class DeepSeekCompletionProvider {
         }
 
         const { prompt, suffix } = buildFIM(document, position);
+
+        // Comment-to-code mode: cursor follows a comment → use chat API
+        if (isCommentBlock(document, position)) {
+          dbg("comment-to-code mode → using chat API");
+          try {
+            const result = await requestCommentToCode(document, position, token);
+            if (token.isCancellationRequested || !result) { resolve([]); return; }
+            const cleaned = cleanCompletion(result, true);
+            if (!cleaned) { resolve([]); return; }
+            startRequest(cleaned, document, position);
+            dbg(`state SET (chat) → ${cleaned.length}c`);
+            _lastSuggestion = {
+              text: cleaned, uri: document.uri.toString(),
+              line: position.line, character: position.character,
+            };
+            rememberSuggestion(_lastSuggestion);
+            setGhostAnchor(document, cleaned, position);
+
+            const item = makeCompletionItem(cleaned);
+            resolve([item]);
+            return;
+          } catch (err) {
+            dbg(`comment-to-code failed: ${err.message}, falling back to FIM`);
+            // Fall through to FIM below
+          }
+        }
         const model = cfg.get("model");
         const cKey = cacheKey(prompt, suffix, model);
 
@@ -890,7 +1067,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.5.5 activated, debug logging on");
+  dbg("v1.6.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1058,14 +1235,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.5.5 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.6.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.5.5 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.6.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
