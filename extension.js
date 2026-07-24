@@ -314,6 +314,7 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
 
 let _lastSuggestion = null; // { text, uri, line }
 let _pendingRemainder = null; // remainder after partial accept
+let _cursorTriggerTimer = null;
 
 // ── Provider ─────────────────────────────────────────────────────────
 
@@ -470,6 +471,31 @@ function activate(context) {
 
   watchAcceptance(context);
 
+  // Auto-trigger: cursor inside empty parens — user typed `print()` then
+  // arrowed in; no-text-change = no normal trigger. Detect and fire.
+  context.subscriptions.push(
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      if (!config().get("triggerOnExplicit")) return;
+      const editor = e.textEditor;
+      const doc = editor.document;
+      const pos = editor.selection.active;
+      const line = doc.lineAt(pos.line).text;
+      const before = line.slice(0, pos.character);
+      const after = line.slice(pos.character);
+      const openParen = before.lastIndexOf("(");
+      if (openParen === -1) return;
+      const closeParen = after.indexOf(")");
+      if (closeParen === -1) return;
+      const between = before.slice(openParen + 1) + after.slice(0, closeParen);
+      if (between.trim().length === 0) {
+        if (_cursorTriggerTimer) clearTimeout(_cursorTriggerTimer);
+        _cursorTriggerTimer = setTimeout(() => {
+          vscode.commands.executeCommand("editor.action.inlineSuggest.trigger");
+        }, 200);
+      }
+    })
+  );
+
   // Model switcher
   context.subscriptions.push(
     vscode.commands.registerCommand("dsAutocomplete.switchModel", async () => {
@@ -545,14 +571,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.1.3 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.2.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.1.3 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.2.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {

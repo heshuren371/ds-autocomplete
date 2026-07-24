@@ -38,6 +38,9 @@
   ],
   "main": "./extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "editor.inlineSuggest.suppressSuggestions": true
+    },
     "configuration": {
       "title": "DS Autocomplete",
       "properties": {
@@ -107,8 +110,8 @@
         },
         "dsAutocomplete.triggerOnExplicit": {
           "type": "boolean",
-          "default": false,
-          "description": "Also trigger on explicit request (Ctrl+Space)"
+          "default": true,
+          "description": "Also trigger on explicit request (trigger keybinding or auto-detect empty parens)"
         },
         "dsAutocomplete.skipInString": {
           "type": "boolean",

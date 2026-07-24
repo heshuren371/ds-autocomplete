@@ -84,6 +84,8 @@ let registeredSelectors = [];
 let lastRequestBody = null;
 let requestCount = 0;
 let sseResponseText = ' world")';
+let cursorTriggerCount = 0;
+let selectionListeners = [];
 let insertedTexts = [];
 const commandHandlers = {};
 
@@ -115,10 +117,11 @@ const mockVscode = {
     showInformationMessage: async () => null,
     showWarningMessage: async () => null,
     activeTextEditor: null,
+    onDidChangeTextEditorSelection: (fn) => { selectionListeners.push(fn); return { dispose() {} }; },
   },
   commands: {
     registerCommand: (id, fn) => { commandHandlers[id] = fn; return { dispose() {} }; },
-    executeCommand: async () => {},
+    executeCommand: async (cmd) => { if (cmd === "editor.action.inlineSuggest.trigger") cursorTriggerCount++; },
   },
   env: { openExternal: async () => true },
   Uri: { parse: (s) => ({ toString: () => s }) },
