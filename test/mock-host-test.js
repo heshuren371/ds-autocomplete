@@ -86,6 +86,7 @@ let requestCount = 0;
 let sseResponseText = ' world")';
 let cursorTriggerCount = 0;
 let selectionListeners = [];
+let docListeners = [];
 let insertedTexts = [];
 const commandHandlers = {};
 
@@ -99,7 +100,7 @@ const mockVscode = {
   StatusBarAlignment: { Right: 2 },
   workspace: {
     getConfiguration: () => ({ get: (k) => settings[k], update: async () => {} }),
-    onDidChangeTextDocument: () => ({ dispose() {} }),
+    onDidChangeTextDocument: (fn) => { docListeners.push(fn); return { dispose() {} }; },
     onDidChangeConfiguration: () => ({ dispose() {} }),
   },
   languages: {
@@ -321,7 +322,37 @@ async function run() {
   assert.strictEqual(requestCount, 1, "same-position re-query must not hit the API again");
   console.log("✓ T9 same-position re-query re-serves suggestion (no API call, no clear)");
 
-  console.log("\nALL 9 TESTS PASSED");
+  // ── T10: document-change event arriving AFTER provider shrink must not clear state ──
+  // Real bug (debug log 2026-07-24): keystroke → provider's instant-remainder shrinks
+  // _lastSuggestion.text FIRST → the same edit's onDidChangeTextDocument arrives LATE
+  // → old startsWith check compared the typed char against the ALREADY-SHRUNK text,
+  //   misfired, and cleared state → ghost text vanished on every keystroke.
+  sseResponseText = "sum = a + b";
+  requestCount = 0;
+  doc = new FakeDocument("total = 0\nresult = ");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(1, 9), auto, cancelToken());
+  assert(items.length === 1, "T10 setup: ghost shown");
+  // User types "s": provider shrinks FIRST (instant-remainder)
+  const docT10 = new FakeDocument("total = 0\nresult = s");
+  items = await capturedProvider.provideInlineCompletionItems(
+    docT10, new Position(1, 10), auto, cancelToken());
+  assert(items.length === 1 && items[0].insertText === "um = a + b",
+    "T10: instant-remainder shrank suggestion");
+  // The SAME edit's document event arrives LATE (out-of-order, exactly as in the log)
+  for (const fn of docListeners) {
+    fn({ document: { uri: { toString: () => docT10.uri.toString() } },
+         contentChanges: [{ text: "s" }] });
+  }
+  // State must SURVIVE: same-position re-query re-serves without a new API call
+  items = await capturedProvider.provideInlineCompletionItems(
+    docT10, new Position(1, 10), auto, cancelToken());
+  assert(items.length === 1 && items[0].insertText === "um = a + b",
+    "T10: late document event must NOT clear _lastSuggestion (race regression)");
+  assert.strictEqual(requestCount, 1, "T10: no new API call after the race");
+  console.log("✓ T10 late document-change event does not clear state (race fixed)");
+
+  console.log("\nALL 10 TESTS PASSED");
   process.exit(0);
 }
 

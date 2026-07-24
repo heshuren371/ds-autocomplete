@@ -519,12 +519,12 @@ function watchAcceptance(context) {
           _lastSuggestion = null;
           return;
         }
-        // Edit doesn't match the suggestion start → stale, let provider restart
-        if (!_lastSuggestion.text.startsWith(change.text)) {
-          _lastSuggestion = null;
-          return;
-        }
-        // Partial match (user typing along) → provider handles instant remainder
+        // DO NOT clear on non-matching edits here. This listener races with the
+        // provider's instant-remainder: when the document event arrives AFTER the
+        // provider already shrank _lastSuggestion.text past this edit, startsWith
+        // misfires and nukes valid state (the "ghost text vanishes on every
+        // keystroke" bug — debug log 2026-07-24). The provider's own stale check
+        // (typed text from anchor→cursor vs suggestion) is the single source of truth.
       }
     })
   );
@@ -537,7 +537,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.3.5 activated, debug logging on");
+  dbg("v1.3.6 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -668,14 +668,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.5 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.6 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.5 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.6 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
