@@ -39,7 +39,9 @@
   "main": "./extension.js",
   "contributes": {
     "configurationDefaults": {
-      "editor.inlineSuggest.suppressSuggestions": true
+      "editor.inlineSuggest.suppressSuggestions": true,
+      "editor.wordBasedSuggestions": "off",
+      "editor.suggest.showWords": false
     },
     "configuration": {
       "title": "DS Autocomplete",
@@ -80,7 +82,7 @@
         },
         "dsAutocomplete.debounceMs": {
           "type": "number",
-          "default": 350,
+          "default": 200,
           "minimum": 100,
           "maximum": 2000,
           "description": "Debounce delay in milliseconds"
