@@ -312,7 +312,7 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
 
 // ── Word-by-word accept ─────────────────────────────────────────────
 
-let _lastSuggestion = null; // { text, uri, line }
+let _lastSuggestion = null; // { text, uri, line, character }
 let _pendingRemainder = null; // remainder after partial accept
 let _cursorTriggerTimer = null;
 
@@ -339,6 +339,44 @@ class DeepSeekCompletionProvider {
         return [new vscode.InlineCompletionItem(rem.text)];
       }
       return [];
+    }
+
+    // ── Instant remainder: user is typing along with the current suggestion ──
+    // If the typed characters match the start of _lastSuggestion, serve the
+    // remainder instantly — no debounce, no API call. This eliminates the
+    // flicker/vanishing ghost text when you type what the model predicted.
+    if (_lastSuggestion && _lastSuggestion.uri === document.uri.toString()) {
+      const anchorOff = document.offsetAt(
+        new vscode.Position(_lastSuggestion.line, _lastSuggestion.character)
+      );
+      const cursorOff = document.offsetAt(position);
+      const typedLen = cursorOff - anchorOff;
+      if (typedLen > 0 && typedLen <= _lastSuggestion.text.length) {
+        const typed = document.getText(
+          new vscode.Range(document.positionAt(anchorOff), position)
+        );
+        if (_lastSuggestion.text.startsWith(typed)) {
+          const remainder = _lastSuggestion.text.slice(typed.length);
+          if (remainder) {
+            _lastSuggestion.text = remainder;
+            _lastSuggestion.line = position.line;
+            _lastSuggestion.character = position.character;
+            // Reset debounce timer — we're serving instantly, no need for API
+            if (this._debounceTimer) clearTimeout(this._debounceTimer);
+            if (this._pendingResolve) {
+              this._pendingResolve([]);
+              this._pendingResolve = null;
+            }
+            return [new vscode.InlineCompletionItem(remainder)];
+          }
+          // Perfect match — entire suggestion consumed
+          statBump("accepted");
+          _lastSuggestion = null;
+          return [];
+        }
+      }
+      // Typed something that doesn't match, or cursor moved elsewhere → stale
+      _lastSuggestion = null;
     }
 
     if (shouldSkip(document, position)) return [];
@@ -382,7 +420,12 @@ class DeepSeekCompletionProvider {
           const cleaned = cleanCompletion(cached, cfg.get("multiLine"));
           if (cleaned) {
             statBump("shown");
-            _lastSuggestion = { text: cleaned, uri: document.uri.toString(), line: position.line };
+            _lastSuggestion = {
+              text: cleaned,
+              uri: document.uri.toString(),
+              line: position.line,
+              character: position.character,
+            };
             resolve([new vscode.InlineCompletionItem(cleaned)]);
             return;
           }
@@ -409,7 +452,12 @@ class DeepSeekCompletionProvider {
           }
 
           statBump("shown");
-          _lastSuggestion = { text: cleaned, uri: document.uri.toString(), line: position.line };
+          _lastSuggestion = {
+            text: cleaned,
+            uri: document.uri.toString(),
+            line: position.line,
+            character: position.character,
+          };
 
           const item = new vscode.InlineCompletionItem(cleaned);
           if (cfg.get("replacePartialWord")) {
@@ -436,15 +484,24 @@ function watchAcceptance(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (!_lastSuggestion) return;
-      if (e.document.uri.toString() !== _lastSuggestion.uri) return;
+      if (e.document.uri.toString() !== _lastSuggestion.uri) {
+        _lastSuggestion = null;
+        return;
+      }
       for (const change of e.contentChanges) {
-        if (!change.text) continue;
-        // Full accept: inserted text matches the suggestion start
-        if (_lastSuggestion.text.startsWith(change.text) && change.text.length > 1) {
+        if (!change.text || !_lastSuggestion) continue;
+        // Full accept (Tab): VSCode inserts the entire suggestion at once
+        if (change.text === _lastSuggestion.text) {
           statBump("accepted");
           _lastSuggestion = null;
           return;
         }
+        // Edit doesn't match the suggestion start → stale, let provider restart
+        if (!_lastSuggestion.text.startsWith(change.text)) {
+          _lastSuggestion = null;
+          return;
+        }
+        // Partial match (user typing along) → provider handles instant remainder
       }
     })
   );
@@ -529,6 +586,8 @@ function activate(context) {
       const remainder = after.slice(trailingSpace.length);
       if (remainder) {
         _lastSuggestion.text = remainder;
+        _lastSuggestion.line = editor.selection.active.line;
+        _lastSuggestion.character = editor.selection.active.character;
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
         statBump("accepted");
@@ -556,6 +615,8 @@ function activate(context) {
 
       if (remainder) {
         _lastSuggestion.text = remainder;
+        _lastSuggestion.line = editor.selection.active.line;
+        _lastSuggestion.character = editor.selection.active.character;
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
         statBump("accepted");
@@ -571,14 +632,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.2.0 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.2.0 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
