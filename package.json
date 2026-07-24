@@ -121,6 +121,13 @@
           "default": false,
           "description": "Skip completions inside unterminated strings (quote counting). Default OFF: half-typed lines usually carry an open quote and FIM completes string interiors natively."
         },
+        "dsAutocomplete.disabledLanguages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "List of language IDs to explicitly disable inline completions for (complements enabledLanguages)",
+          "scope": "language-overridable"
+        },
         "dsAutocomplete.debug": {
           "type": "boolean",
           "default": false,

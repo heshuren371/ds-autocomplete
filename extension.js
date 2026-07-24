@@ -49,7 +49,17 @@ function updateStatusBarModel() {
   const model = config().get("model");
   const entry = _availableModels.find((m) => m.value === model);
   const label = entry ? entry.label.replace("DeepSeek ", "") : model;
-  _statusBar.text = `$(hubot) DS ${label}`;
+
+  // Check if the current language is disabled
+  const editor = vscode.window.activeTextEditor;
+  const lang = (editor && editor.document) ? editor.document.languageId : "";
+  const disabled = (config().get("disabledLanguages") || []).includes(lang);
+  const langIcon = disabled ? "$(circle-slash)" : "$(symbol-text)";
+
+  _statusBar.text = `${langIcon} DS ${label}`;
+  _statusBar.tooltip = disabled
+    ? `DeepSeek: ${label} (disabled for ${lang} — check dsAutocomplete.disabledLanguages)`
+    : `DeepSeek: ${label} · ${lang}`;
 }
 
 function showStatus(text, icon, ms) {
@@ -332,6 +342,35 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
   }
 }
 
+// ── Request lifecycle tracking (Copilot pattern) ────────────────────
+// Each suggestion gets a UUID; tracked through show→accept/reject/ignore.
+// Used for quality telemetry — understanding WHY a suggestion didn't get used.
+let _requestUuid = 0;
+let _currentRequest = null; // { id, text, uri, line, character, shownAt }
+
+function startRequest(suggestionText, document, position) {
+  _requestUuid++;
+  _currentRequest = {
+    id: _requestUuid,
+    text: suggestionText,
+    uri: document.uri.toString(),
+    line: position.line,
+    character: position.character,
+    shownAt: Date.now(),
+    status: "shown",
+  };
+  statBump("shown");
+  if (_currentRequest.id % 50 === 0) dbg(`stats panel → Shown:${_stats.shown} Accepted:${_stats.accepted} Rejected:${_stats.rejected} Cache:${_stats.cacheHits}`);
+}
+
+function endRequest(status) {
+  if (!_currentRequest) return;
+  _currentRequest.status = status;
+  _currentRequest.durationMs = Date.now() - _currentRequest.shownAt;
+  statBump(status);
+  _currentRequest = null;
+}
+
 // ── Word-by-word accept ─────────────────────────────────────────────
 
 let _lastSuggestion = null; // { text, uri, line, character }
@@ -418,6 +457,13 @@ class DeepSeekCompletionProvider {
 
   async provideInlineCompletionItems(document, position, context, token) {
     const cfg = config();
+
+    // Explicit language disable (per-language control, Copilot pattern)
+    const disabled = cfg.get("disabledLanguages") || [];
+    if (disabled.includes(document.languageId)) {
+      return [];
+    }
+
     const kind = context.triggerKind === vscode.InlineCompletionTriggerKind.Explicit ? "Explicit" : "Auto";
     dbg(`call ${kind} @${position.line}:${position.character} lastSug=${_lastSuggestion ? _lastSuggestion.text.length + "c" : "null"}`);
 
@@ -430,6 +476,7 @@ class DeepSeekCompletionProvider {
       const rem = _pendingRemainder;
       _pendingRemainder = null;
       if (rem.text) {
+        startRequest(rem.text, document, position);
         setGhostAnchor(document, rem.text, position);
         return [new vscode.InlineCompletionItem(rem.text)];
       }
@@ -455,6 +502,7 @@ class DeepSeekCompletionProvider {
           return null;
         }
         statBump("accepted");
+        endRequest("accepted");
         dbg("instant-remainder(vscode) fully consumed");
         return [];
       }
@@ -494,11 +542,12 @@ class DeepSeekCompletionProvider {
               this._pendingResolve([]);
               this._pendingResolve = null;
             }
+            startRequest(remainder, document, position);
             setGhostAnchor(document, remainder, position);
             return [new vscode.InlineCompletionItem(remainder)];
           }
           // Perfect match — entire suggestion consumed
-          statBump("accepted");
+          endRequest("accepted");
           dbg("state CLEAR ≡ perfect-match (whole suggestion consumed)");
           _lastSuggestion = null;
           return [];
@@ -530,6 +579,7 @@ class DeepSeekCompletionProvider {
                 line: position.line, character: position.character
               };
               rememberSuggestion(_lastSuggestion);
+              startRequest(recRem, document, position);
               setGhostAnchor(document, recRem, position);
               return [new vscode.InlineCompletionItem(recRem)];
             }
@@ -548,6 +598,7 @@ class DeepSeekCompletionProvider {
     // means the user's final keystroke never produces a completion.
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._pendingResolve) {
+      endRequest("ignored");
       dbg("debounce supersede → prev resolved []");
       this._pendingResolve([]);
       this._pendingResolve = null;
@@ -582,7 +633,7 @@ class DeepSeekCompletionProvider {
         if (cached) {
           const cleaned = cleanCompletion(cached, cfg.get("multiLine"));
           if (cleaned) {
-            statBump("shown");
+            startRequest(cleaned, document, position);
             const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
             dbg(`state SET (cache) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
             _lastSuggestion = {
@@ -618,7 +669,7 @@ class DeepSeekCompletionProvider {
             return;
           }
 
-          statBump("shown");
+          startRequest(cleaned, document, position);
           const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
           dbg(`state SET (API) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
           _lastSuggestion = {
@@ -667,7 +718,7 @@ function watchAcceptance(context) {
         if (!change.text || !_lastSuggestion) continue;
         // Full accept (Tab): VSCode inserts the entire suggestion at once
         if (change.text === _lastSuggestion.text) {
-          statBump("accepted");
+          endRequest("accepted");
           dbg("state CLEAR ≡ Tab full-accept (watchAcceptance)");
           _lastSuggestion = null;
           return;
@@ -717,6 +768,11 @@ function activate(context) {
 
   watchAcceptance(context);
 
+  // Update status bar when switching editors (per-language indicator)
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => updateStatusBarModel())
+  );
+
   // Auto-trigger: cursor inside empty parens — user typed `print()` then
   // arrowed in; no-text-change = no normal trigger. Detect and fire.
   context.subscriptions.push(
@@ -728,7 +784,7 @@ function activate(context) {
       const editor = e.textEditor;
       const pos = editor.selection.active;
       if (checkGhostAccepted(editor.document, pos)) {
-        statBump("accepted");
+        endRequest("accepted");
         dbg("ghost accepted (cursor at ghost end + text match)");
         _lastSuggestion = null;
         // Fall through to the rest of the handler (empty-paren trigger below)
@@ -736,7 +792,7 @@ function activate(context) {
       }
       // Cursor moved elsewhere while ghost was showing → rejection
       if (_ghostAnchor && _ghostAnchor.uri === editor.document.uri.toString()) {
-        statBump("rejected");
+        endRequest("rejected");
         dbg("ghost rejected (cursor moved away from ghost end)");
         _ghostAnchor = null;
         _lastSuggestion = null;
@@ -799,7 +855,7 @@ function activate(context) {
         _lastSuggestion.character = editor.selection.active.character;
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
-        statBump("accepted");
+        endRequest("accepted");
         dbg("state CLEAR ≡ partial-accept consumed all");
         _lastSuggestion = null;
       }
@@ -829,7 +885,7 @@ function activate(context) {
         _lastSuggestion.character = editor.selection.active.character;
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
-        statBump("accepted");
+        endRequest("accepted");
         dbg("state CLEAR ≡ partial-accept consumed all");
         _lastSuggestion = null;
       }

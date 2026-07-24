@@ -120,6 +120,7 @@ const mockVscode = {
     showWarningMessage: async () => null,
     activeTextEditor: null,
     onDidChangeTextEditorSelection: (fn) => { selectionListeners.push(fn); return { dispose() {} }; },
+    onDidChangeActiveTextEditor: () => ({ dispose() {} }),
     createOutputChannel: () => ({ appendLine() {}, show() {}, dispose() {} }),
   },
   commands: {
