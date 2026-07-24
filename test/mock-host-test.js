@@ -372,10 +372,10 @@ async function run() {
     { triggerKind: 0,
       selectedCompletionInfo: { text: "print(value)", range: new Range(new Position(1, 2), new Position(1, 3)) } },
     cancelToken());
-  assert(items11.length === 1 && items11[0].insertText === "rint(value)",
-    "T11: selectedCompletionInfo served remainder instantly");
+  assert(items11 === null || items11 === undefined,
+    "T11: selectedCompletionInfo match returns null — VSCode shrinks ghost itself");
   assert.strictEqual(requestCount, 1, "T11: no new API call — VSCode path is instant");
-  console.log("✓ T11 VSCode-native selectedCompletionInfo serves remainder instantly");
+  console.log("✓ T11 VSCode-native selectedCompletionInfo returns null for VSCode to shrink");
 
   console.log("\nALL 11 TESTS PASSED");
   process.exit(0);
