@@ -363,7 +363,9 @@ class DeepSeekCompletionProvider {
       );
       const cursorOff = document.offsetAt(position);
       const typedLen = cursorOff - anchorOff;
-      if (typedLen > 0 && typedLen <= _lastSuggestion.text.length) {
+      // typedLen === 0: VSCode re-queried at the SAME position (widget toggled,
+      // explicit refresh…). Re-serve the current suggestion — never clear it.
+      if (typedLen >= 0 && typedLen <= _lastSuggestion.text.length) {
         const typed = document.getText(
           new vscode.Range(document.positionAt(anchorOff), position)
         );
@@ -650,14 +652,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.3 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.4 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.3 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.4 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {

@@ -302,7 +302,25 @@ async function run() {
     "item.range must be UNSET so VSCode native shrink-on-type keeps the ghost text");
   console.log("✓ T8 replacePartialWord=false yields range-free item (native shrink compatible)");
 
-  console.log("\nALL 8 TESTS PASSED");
+  // ── T9: same-position re-query re-serves the current suggestion (typedLen===0) ──
+  // VSCode sometimes re-queries the provider without any text change (suggest widget
+  // toggled, explicit refresh). The stale-clear logic must NOT nuke _lastSuggestion
+  // there — otherwise the next keystroke loses the instant-remainder path.
+  sseResponseText = "hello world";
+  requestCount = 0;
+  doc = new FakeDocument("x = 1\ny = ");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(1, 4), auto, cancelToken());
+  assert(items.length === 1, "T9 setup: ghost text shown");
+  assert.strictEqual(requestCount, 1, "T9 setup: one API call");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(1, 4), auto, cancelToken());
+  assert(items.length === 1 && String(items[0].insertText).includes("hello"),
+    "same-position re-query must re-serve the suggestion, not clear it");
+  assert.strictEqual(requestCount, 1, "same-position re-query must not hit the API again");
+  console.log("✓ T9 same-position re-query re-serves suggestion (no API call, no clear)");
+
+  console.log("\nALL 9 TESTS PASSED");
   process.exit(0);
 }
 
