@@ -352,7 +352,32 @@ async function run() {
   assert.strictEqual(requestCount, 1, "T10: no new API call after the race");
   console.log("✓ T10 late document-change event does not clear state (race fixed)");
 
-  console.log("\nALL 10 TESTS PASSED");
+  // ── T11: VSCode-native selectedCompletionInfo path (Continue's approach) ──
+  // When ghost text is visible, VSCode provides selectedCompletionInfo with
+  // full text + range. Our provider uses this AUTHORITATIVE source instead of
+  // our module-level _lastSuggestion. See: continuedev/continue
+  sseResponseText = "print(value)";
+  requestCount = 0;
+  const docT11 = new FakeDocument("def f():\n  ");
+  let items11 = await capturedProvider.provideInlineCompletionItems(
+    docT11, new Position(1, 2),
+    auto,
+    cancelToken());
+  assert(items11.length === 1 && items11[0].insertText === "print(value)", "T11 setup");
+  assert.strictEqual(requestCount, 1, "T11 setup: one API call");
+  // User types "p" — VSCode calls with selectedCompletionInfo
+  const docT11b = new FakeDocument("def f():\n  p");
+  items11 = await capturedProvider.provideInlineCompletionItems(
+    docT11b, new Position(1, 3),
+    { triggerKind: 0,
+      selectedCompletionInfo: { text: "print(value)", range: new Range(new Position(1, 2), new Position(1, 3)) } },
+    cancelToken());
+  assert(items11.length === 1 && items11[0].insertText === "rint(value)",
+    "T11: selectedCompletionInfo served remainder instantly");
+  assert.strictEqual(requestCount, 1, "T11: no new API call — VSCode path is instant");
+  console.log("✓ T11 VSCode-native selectedCompletionInfo serves remainder instantly");
+
+  console.log("\nALL 11 TESTS PASSED");
   process.exit(0);
 }
 

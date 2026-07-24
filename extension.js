@@ -393,6 +393,29 @@ class DeepSeekCompletionProvider {
       return [];
     }
 
+    // ── VSCode-native ghost-text tracking (Continue's approach) ──
+    // When ghost text is visible, VSCode provides selectedCompletionInfo with
+    // the full completion text and the Range from the original position to
+    // the current cursor. This is the AUTHORITATIVE source — no race with
+    // our module-level _lastSuggestion. See: continuedev/continue —
+    // extensions/vscode/src/autocomplete/completionProvider.ts:187-205
+    if (context.selectedCompletionInfo) {
+      const { text, range } = context.selectedCompletionInfo;
+      const typed = document.getText(range);
+      if (text.startsWith(typed)) {
+        const remainder = text.slice(typed.length);
+        if (remainder) {
+          dbg(`instant-remainder(vscode) typed=${JSON.stringify(typed)} rem=${remainder.length}c`);
+          return [new vscode.InlineCompletionItem(remainder)];
+        }
+        statBump("accepted");
+        dbg("instant-remainder(vscode) fully consumed");
+        return [];
+      }
+      // Typed text diverged from ghost → let VSCode dismiss, fall through
+      dbg("instant-remainder(vscode) mismatch, falling through");
+    }
+
     // ── Instant remainder: user is typing along with the current suggestion ──
     // If the typed characters match the start of _lastSuggestion, serve the
     // remainder instantly — no debounce, no API call. This eliminates the
@@ -617,7 +640,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.3.9 activated, debug logging on");
+  dbg("v1.4.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -750,14 +773,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.9 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.4.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.9 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.4.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
