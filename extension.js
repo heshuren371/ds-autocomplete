@@ -188,8 +188,11 @@ function requestFIM(prompt, suffix, cancelToken) {
   if (!key) return Promise.reject(new Error("No API key"));
 
   const multiLine = cfg.get("multiLine");
-  // Smart stop tokens: single-line stops at newline; multi-line stops at blank line
-  const stops = multiLine ? ["\n\n", "\n\n\n"] : ["\n"];
+  // Smart stop tokens: single-line stops at newline; multi-line stops at
+  // 3-blank-line boundary (PEP 8: two blank lines between top-level defs).
+  // Using \n\n was too aggressive — it cut off return statements that
+  // follow a blank separator line within a function body.
+  const stops = multiLine ? ["\n\n\n"] : ["\n"];
   const extraStops = cfg.get("stopTokens") || [];
 
   const body = JSON.stringify({
@@ -643,7 +646,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.4.2 activated, debug logging on");
+  dbg("v1.4.3 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -776,14 +779,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.4.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.4.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.4.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.4.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
