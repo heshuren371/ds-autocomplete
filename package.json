@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -155,6 +155,10 @@
         "title": "DS Autocomplete: Accept Word"
       },
       {
+        "command": "dsAutocomplete.acceptLine",
+        "title": "DS Autocomplete: Accept Line"
+      },
+      {
         "command": "dsAutocomplete.showStats",
         "title": "DS Autocomplete: Show Info"
       }
@@ -164,6 +168,12 @@
         "command": "dsAutocomplete.acceptWord",
         "key": "ctrl+right",
         "mac": "cmd+right",
+        "when": "editorTextFocus && inlineSuggestionVisible && !editorReadonly"
+      },
+      {
+        "command": "dsAutocomplete.acceptLine",
+        "key": "ctrl+down",
+        "mac": "cmd+down",
         "when": "editorTextFocus && inlineSuggestionVisible && !editorReadonly"
       }
     ]

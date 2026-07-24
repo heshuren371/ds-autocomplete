@@ -6,6 +6,8 @@
 //   T3: keystroke landing right after a previous request must NOT be dropped (the reported bug)
 //   T4: skipInString=true restores the conservative string filter
 //   T5: enabledLanguages=["*"] registers a wildcard document selector
+//   T6: acceptLine inserts first line + newline, remainder re-served (Cmd+Down)
+//   T7: acceptWord inserts one word + trailing space, remainder stashed (Cmd+Right)
 
 const assert = require("assert");
 const Module = require("module");
@@ -82,6 +84,8 @@ let registeredSelectors = [];
 let lastRequestBody = null;
 let requestCount = 0;
 let sseResponseText = ' world")';
+let insertedTexts = [];
+const commandHandlers = {};
 
 const mockVscode = {
   Position,
@@ -112,7 +116,10 @@ const mockVscode = {
     showWarningMessage: async () => null,
     activeTextEditor: null,
   },
-  commands: { registerCommand: () => ({ dispose() {} }), executeCommand: async () => {} },
+  commands: {
+    registerCommand: (id, fn) => { commandHandlers[id] = fn; return { dispose() {} }; },
+    executeCommand: async () => {},
+  },
   env: { openExternal: async () => true },
   Uri: { parse: (s) => ({ toString: () => s }) },
 };
@@ -237,7 +244,46 @@ async function run() {
   settings.enabledLanguages = ["python"];
   console.log("✓ T5 enabledLanguages=['*'] registers file+untitled wildcard selectors");
 
-  console.log("\nALL 5 TESTS PASSED");
+  // ── T6: acceptLine (Cmd+Down) — first line + newline inserted, remainder re-served ──
+  mockVscode.window.activeTextEditor = {
+    selection: { active: new Position(0, 5) },
+    edit: async (fn) => { fn({ insert: (pos, text) => insertedTexts.push(text) }); return true; },
+  };
+  sseResponseText = "+ 2 * 3\nprint(y)";
+  requestCount = 0;
+  doc = new FakeDocument("y = x");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(0, 5), auto, cancelToken());
+  assert(String(items[0].insertText).includes("\n"),
+    `multi-line completion expected, got ${JSON.stringify(items[0].insertText)}`);
+  insertedTexts = [];
+  await commandHandlers["dsAutocomplete.acceptLine"]();
+  assert.deepStrictEqual(insertedTexts, ["+ 2 * 3\n"],
+    `acceptLine must insert first line + newline, got ${JSON.stringify(insertedTexts)}`);
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(1, 0), auto, cancelToken());
+  assert.strictEqual(String(items[0].insertText), "print(y)",
+    "remainder must be re-served as ghost text after acceptLine");
+  console.log('✓ T6 acceptLine inserted "+ 2 * 3\\n", remainder "print(y)" re-served');
+
+  // ── T7: acceptWord (Cmd+Right) — one word + trailing space, remainder stashed ──
+  sseResponseText = "result_value extra_stuff";
+  requestCount = 0;
+  doc = new FakeDocument("total = compute");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(0, 15), auto, cancelToken());
+  assert(items.length === 1, "completion shown for acceptWord");
+  insertedTexts = [];
+  await commandHandlers["dsAutocomplete.acceptWord"]();
+  assert.deepStrictEqual(insertedTexts, ["result_value "],
+    `acceptWord must insert one word + trailing space, got ${JSON.stringify(insertedTexts)}`);
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(0, 27), auto, cancelToken());
+  assert.strictEqual(String(items[0].insertText), "extra_stuff",
+    "remainder must be re-served as ghost text after acceptWord");
+  console.log('✓ T7 acceptWord inserted "result_value ", remainder "extra_stuff" re-served');
+
+  console.log("\nALL 7 TESTS PASSED");
   process.exit(0);
 }
 

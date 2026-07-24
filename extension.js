@@ -511,6 +511,33 @@ function activate(context) {
     })
   );
 
+  // Line-by-line accept (Cmd+Down)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dsAutocomplete.acceptLine", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || !_lastSuggestion) {
+        await vscode.commands.executeCommand("editor.action.inlineSuggest.commit");
+        return;
+      }
+      const full = _lastSuggestion.text;
+      const nl = full.indexOf("\n");
+      // First line INCLUDING its line break — cursor lands on the next line,
+      // where the remainder renders as fresh ghost text.
+      const unit = nl === -1 ? full : full.slice(0, nl + 1);
+      const remainder = nl === -1 ? "" : full.slice(nl + 1);
+
+      await editor.edit((eb) => eb.insert(editor.selection.active, unit));
+
+      if (remainder) {
+        _lastSuggestion.text = remainder;
+        _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
+      } else {
+        statBump("accepted");
+        _lastSuggestion = null;
+      }
+    })
+  );
+
   // Stats
   context.subscriptions.push(
     vscode.commands.registerCommand("dsAutocomplete.showStats", () => {
@@ -518,14 +545,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.1.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.1.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.1.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.1.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
