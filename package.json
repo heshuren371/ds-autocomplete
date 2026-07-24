@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -110,6 +110,11 @@
           "default": false,
           "description": "Also trigger on explicit request (Ctrl+Space)"
         },
+        "dsAutocomplete.skipInString": {
+          "type": "boolean",
+          "default": false,
+          "description": "Skip completions inside unterminated strings (quote counting). Default OFF: half-typed lines usually carry an open quote and FIM completes string interiors natively."
+        },
         "dsAutocomplete.maxPrefixChars": {
           "type": "number",
           "default": 3000,
@@ -133,17 +138,10 @@
         "dsAutocomplete.enabledLanguages": {
           "type": "array",
           "default": [
-            "python",
-            "javascript",
-            "typescript",
-            "go",
-            "rust",
-            "java",
-            "c",
-            "cpp"
+            "*"
           ],
           "items": { "type": "string" },
-          "description": "Languages where autocomplete is active"
+          "description": "Languages where autocomplete is active. [\"*\"] = all file types; or list specific ones like [\"python\", \"javascript\"]"
         }
       }
     },

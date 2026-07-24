@@ -117,12 +117,17 @@ function shouldSkip(document, position) {
   const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position)).trim();
   if (!before) return true;
 
-  // 2) Cursor inside an unterminated string literal (rough quote counting)
-  const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
-  const singles = (linePrefix.match(/'/g) || []).length;
-  const doubles = (linePrefix.match(/"/g) || []).length;
-  const backticks = (linePrefix.match(/`/g) || []).length;
-  if (singles % 2 === 1 || doubles % 2 === 1 || backticks % 2 === 1) return true;
+  // 2) Cursor inside an unterminated string literal — OPT-IN only (skipInString).
+  // Half-typed lines usually carry an open quote (`print("hel`), and FIM models
+  // complete string interiors natively. Skipping here silently killed the most
+  // wanted completions, so this filter is OFF by default.
+  if (config().get("skipInString")) {
+    const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
+    const singles = (linePrefix.match(/'/g) || []).length;
+    const doubles = (linePrefix.match(/"/g) || []).length;
+    const backticks = (linePrefix.match(/`/g) || []).length;
+    if (singles % 2 === 1 || doubles % 2 === 1 || backticks % 2 === 1) return true;
+  }
 
   return false;
 }
@@ -315,7 +320,7 @@ let _pendingRemainder = null; // remainder after partial accept
 class DeepSeekCompletionProvider {
   constructor() {
     this._debounceTimer = null;
-    this._lastRequest = 0;
+    this._pendingResolve = null;
   }
 
   async provideInlineCompletionItems(document, position, context, token) {
@@ -337,14 +342,30 @@ class DeepSeekCompletionProvider {
 
     if (shouldSkip(document, position)) return [];
 
-    const now = Date.now();
-    if (now - this._lastRequest < cfg.get("debounceMs")) return [];
+    // Supersede any pending debounced call — resolve its promise so nothing dangles.
+    // EVERY keystroke must reschedule the timer; dropping one without rescheduling
+    // means the user's final keystroke never produces a completion.
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
+    if (this._pendingResolve) {
+      this._pendingResolve([]);
+      this._pendingResolve = null;
+    }
 
     return new Promise((resolve) => {
+      this._pendingResolve = resolve;
+      token.onCancellationRequested(() => {
+        if (this._debounceTimer) {
+          clearTimeout(this._debounceTimer);
+          this._debounceTimer = null;
+        }
+        if (this._pendingResolve === resolve) {
+          this._pendingResolve = null;
+          resolve([]);
+        }
+      });
       this._debounceTimer = setTimeout(async () => {
-        this._lastRequest = Date.now();
         this._debounceTimer = null;
+        this._pendingResolve = null;
         if (token.isCancellationRequested) {
           resolve([]);
           return;
@@ -437,10 +458,13 @@ function activate(context) {
 
   const provider = new DeepSeekCompletionProvider();
   const langs = config().get("enabledLanguages");
+  const selectors = langs.includes("*")
+    ? [{ scheme: "file" }, { scheme: "untitled" }]
+    : langs.map((l) => ({ language: l }));
 
-  for (const lang of langs) {
+  for (const sel of selectors) {
     context.subscriptions.push(
-      vscode.languages.registerInlineCompletionItemProvider({ language: lang }, provider)
+      vscode.languages.registerInlineCompletionItemProvider(sel, provider)
     );
   }
 
@@ -494,14 +518,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.1.1 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.1.2 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.1.1 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.1.2 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
