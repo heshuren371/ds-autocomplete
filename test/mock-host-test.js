@@ -286,7 +286,22 @@ async function run() {
     "remainder must be re-served as ghost text after acceptWord");
   console.log('✓ T7 acceptWord inserted "result_value ", remainder "extra_stuff" re-served');
 
-  console.log("\nALL 7 TESTS PASSED");
+  // ── T8: replacePartialWord=false → item has NO range (native shrink-on-type compat) ──
+  // VSCode's built-in "shrink ghost text when user types matching chars" only works
+  // when the InlineCompletionItem carries no range. A ranged item gets dismissed on
+  // every keystroke — the "ghost text vanishes while typing along" bug.
+  sseResponseText = "ha + 1";
+  settings.replacePartialWord = false;
+  requestCount = 0;
+  doc = new FakeDocument("alpha = 1\nbeta = alp");
+  items = await capturedProvider.provideInlineCompletionItems(
+    doc, new Position(1, 10), auto, cancelToken());
+  assert(items.length === 1, "completion shown with replacePartialWord=false");
+  assert(!items[0].range,
+    "item.range must be UNSET so VSCode native shrink-on-type keeps the ghost text");
+  console.log("✓ T8 replacePartialWord=false yields range-free item (native shrink compatible)");
+
+  console.log("\nALL 8 TESTS PASSED");
   process.exit(0);
 }
 

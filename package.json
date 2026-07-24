@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -107,8 +107,8 @@
         },
         "dsAutocomplete.replacePartialWord": {
           "type": "boolean",
-          "default": true,
-          "description": "Replace the partial word at cursor with completion"
+          "default": false,
+          "description": "Replace the partial word at cursor with completion. WARNING: setting item.range breaks VSCode's native ghost-text shrink-on-type (ghost text vanishes on each keystroke). Keep OFF."
         },
         "dsAutocomplete.triggerOnExplicit": {
           "type": "boolean",
