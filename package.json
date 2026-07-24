@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -40,6 +40,7 @@
   "contributes": {
     "configurationDefaults": {
       "editor.inlineSuggest.suppressSuggestions": true,
+      "editor.inlineSuggest.experimental.showOnSuggestConflict": true,
       "editor.wordBasedSuggestions": "off",
       "editor.suggest.showWords": false
     },
@@ -119,6 +120,11 @@
           "type": "boolean",
           "default": false,
           "description": "Skip completions inside unterminated strings (quote counting). Default OFF: half-typed lines usually carry an open quote and FIM completes string interiors natively."
+        },
+        "dsAutocomplete.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log provider calls to the 'DS Autocomplete' output channel (for diagnosing ghost-text issues)"
         },
         "dsAutocomplete.maxPrefixChars": {
           "type": "number",

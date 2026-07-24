@@ -7,6 +7,16 @@ function config() {
   return vscode.workspace.getConfiguration("dsAutocomplete");
 }
 
+// ── Debug log (Output channel: "DS Autocomplete") ───────────────────
+
+let _output = null;
+function dbg(msg) {
+  if (!config().get("debug")) return;
+  if (!_output) _output = vscode.window.createOutputChannel("DS Autocomplete");
+  const t = new Date().toISOString().slice(11, 23);
+  _output.appendLine(`[${t}] ${msg}`);
+}
+
 // ── Status bar ───────────────────────────────────────────────────────
 
 let _statusBar = null;
@@ -326,6 +336,8 @@ class DeepSeekCompletionProvider {
 
   async provideInlineCompletionItems(document, position, context, token) {
     const cfg = config();
+    const kind = context.triggerKind === vscode.InlineCompletionTriggerKind.Explicit ? "Explicit" : "Auto";
+    dbg(`call ${kind} @${position.line}:${position.character} lastSug=${_lastSuggestion ? _lastSuggestion.text.length + "c" : "null"}`);
 
     if (context.triggerKind === vscode.InlineCompletionTriggerKind.Explicit && !cfg.get("triggerOnExplicit")) {
       return [];
@@ -358,6 +370,7 @@ class DeepSeekCompletionProvider {
         if (_lastSuggestion.text.startsWith(typed)) {
           const remainder = _lastSuggestion.text.slice(typed.length);
           if (remainder) {
+            dbg(`instant-remainder typed=${JSON.stringify(typed)} rem=${remainder.length}c`);
             _lastSuggestion.text = remainder;
             _lastSuggestion.line = position.line;
             _lastSuggestion.character = position.character;
@@ -376,16 +389,21 @@ class DeepSeekCompletionProvider {
         }
       }
       // Typed something that doesn't match, or cursor moved elsewhere → stale
+      dbg(`instant-remainder STALE-CLEAR typedLen=${typedLen}`);
       _lastSuggestion = null;
     }
 
-    if (shouldSkip(document, position)) return [];
+    if (shouldSkip(document, position)) {
+      dbg("shouldSkip → []");
+      return [];
+    }
 
     // Supersede any pending debounced call — resolve its promise so nothing dangles.
     // EVERY keystroke must reschedule the timer; dropping one without rescheduling
     // means the user's final keystroke never produces a completion.
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._pendingResolve) {
+      dbg("debounce supersede → prev resolved []");
       this._pendingResolve([]);
       this._pendingResolve = null;
     }
@@ -632,14 +650,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
