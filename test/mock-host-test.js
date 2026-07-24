@@ -377,7 +377,25 @@ async function run() {
   assert.strictEqual(requestCount, 1, "T11: no new API call — VSCode path is instant");
   console.log("✓ T11 VSCode-native selectedCompletionInfo returns null for VSCode to shrink");
 
-  console.log("\nALL 11 TESTS PASSED");
+  // ── T12: ghost text acceptance detection ──
+  // Simulate Tab-accept: cursor moves to ghost end, document has the text
+  sseResponseText = "hello";
+  requestCount = 0;
+  doc = new FakeDocument("x\ny");
+  let items12 = await capturedProvider.provideInlineCompletionItems(doc, new Position(1, 0), auto, cancelToken());
+  assert(items12.length === 1 && items12[0].insertText === "hello", "T12 setup");
+  assert.strictEqual(requestCount, 1, "T12 setup: one API call");
+  // Simulate Tab accept: document now has "hello", cursor at ghost end
+  const docAccepted = new FakeDocument("x\nyhello");
+  for (const fn of selectionListeners) {
+    fn({ textEditor: { document: docAccepted, selection: { active: new Position(1, 5) } } });
+  }
+  // After acceptance, provider re-called → state cleared → new API request
+  items12 = await capturedProvider.provideInlineCompletionItems(docAccepted, new Position(1, 5), auto, cancelToken());
+  assert.strictEqual(requestCount, 2, "T12: after ghost acceptance, new API call issued (not instant remainder)");
+  console.log("✓ T12 ghost text acceptance detection — cursor at ghost end + text match = accepted");
+
+  console.log("\nALL 12 TESTS PASSED");
   process.exit(0);
 }
 

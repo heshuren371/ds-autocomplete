@@ -337,6 +337,45 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
 let _lastSuggestion = null; // { text, uri, line, character }
 let _pendingRemainder = null; // remainder after partial accept
 
+// ── Ghost text acceptance tracker (Continue/Copilot pattern) ─────────
+// When ghost text is shown, record the expected end position.
+// On cursor movement to that position → acceptance (Tab or typed-all).
+// On cursor movement elsewhere → rejection (counter for quality tracking).
+let _ghostAnchor = null; // { uri, text, startLine, startCharacter, endLine, endCharacter }
+
+function setGhostAnchor(document, text, startPosition) {
+  if (!text) { _ghostAnchor = null; return; }
+  const lines = text.split("\n");
+  _ghostAnchor = {
+    uri: document.uri.toString(),
+    text,
+    startLine: startPosition.line,
+    startCharacter: startPosition.character,
+    endLine: startPosition.line + lines.length - 1,
+    endCharacter: lines.length === 1
+      ? startPosition.character + text.length
+      : lines[lines.length - 1].length,
+  };
+}
+
+function checkGhostAccepted(document, newPosition) {
+  if (!_ghostAnchor) return false;
+  if (_ghostAnchor.uri !== document.uri.toString()) return false;
+  if (newPosition.line !== _ghostAnchor.endLine ||
+      newPosition.character !== _ghostAnchor.endCharacter) return false;
+  try {
+    const range = new vscode.Range(
+      new vscode.Position(_ghostAnchor.startLine, _ghostAnchor.startCharacter),
+      new vscode.Position(_ghostAnchor.endLine, _ghostAnchor.endCharacter)
+    );
+    if (document.getText(range) === _ghostAnchor.text) {
+      _ghostAnchor = null;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 // ── Suggestion history (survives widget flicker, IME, races) ────────
 // When _lastSuggestion is cleared by suggest widget, IME commit,
 // or any external event, the next provider call can recover the ghost
@@ -391,6 +430,7 @@ class DeepSeekCompletionProvider {
       const rem = _pendingRemainder;
       _pendingRemainder = null;
       if (rem.text) {
+        setGhostAnchor(document, rem.text, position);
         return [new vscode.InlineCompletionItem(rem.text)];
       }
       return [];
@@ -454,6 +494,7 @@ class DeepSeekCompletionProvider {
               this._pendingResolve([]);
               this._pendingResolve = null;
             }
+            setGhostAnchor(document, remainder, position);
             return [new vscode.InlineCompletionItem(remainder)];
           }
           // Perfect match — entire suggestion consumed
@@ -489,6 +530,7 @@ class DeepSeekCompletionProvider {
                 line: position.line, character: position.character
               };
               rememberSuggestion(_lastSuggestion);
+              setGhostAnchor(document, recRem, position);
               return [new vscode.InlineCompletionItem(recRem)];
             }
           }
@@ -550,6 +592,7 @@ class DeepSeekCompletionProvider {
               character: position.character,
             };
             rememberSuggestion(_lastSuggestion);
+            setGhostAnchor(document, cleaned, position);
             resolve([new vscode.InlineCompletionItem(cleaned)]);
             return;
           }
@@ -585,6 +628,7 @@ class DeepSeekCompletionProvider {
             character: position.character,
           };
           rememberSuggestion(_lastSuggestion);
+          setGhostAnchor(document, cleaned, position);
 
           const item = new vscode.InlineCompletionItem(cleaned);
           if (cfg.get("replacePartialWord")) {
@@ -646,7 +690,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.4.3 activated, debug logging on");
+  dbg("v1.5.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -677,10 +721,30 @@ function activate(context) {
   // arrowed in; no-text-change = no normal trigger. Detect and fire.
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((e) => {
-      if (!config().get("triggerOnExplicit")) return;
+      // ── Ghost text acceptance detection (Continue/Copilot pattern) ──
+      // Cursor moved — check if it landed at the expected ghost-text end
+      // position. If yes and the document confirms the text was inserted,
+      // it was an acceptance (Tab or typed-all-chars).
       const editor = e.textEditor;
-      const doc = editor.document;
       const pos = editor.selection.active;
+      if (checkGhostAccepted(editor.document, pos)) {
+        statBump("accepted");
+        dbg("ghost accepted (cursor at ghost end + text match)");
+        _lastSuggestion = null;
+        // Fall through to the rest of the handler (empty-paren trigger below)
+        return;
+      }
+      // Cursor moved elsewhere while ghost was showing → rejection
+      if (_ghostAnchor && _ghostAnchor.uri === editor.document.uri.toString()) {
+        statBump("rejected");
+        dbg("ghost rejected (cursor moved away from ghost end)");
+        _ghostAnchor = null;
+        _lastSuggestion = null;
+      }
+
+      // ── Empty-paren auto-trigger ──
+      if (!config().get("triggerOnExplicit")) return;
+      const doc = editor.document;
       const line = doc.lineAt(pos.line).text;
       const before = line.slice(0, pos.character);
       const after = line.slice(pos.character);
@@ -779,14 +843,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.4.3 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.5.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.4.3 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.5.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
