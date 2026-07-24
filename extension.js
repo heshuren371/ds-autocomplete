@@ -10,11 +10,14 @@ function config() {
 // ── Debug log (Output channel: "DS Autocomplete") ───────────────────
 
 let _output = null;
+function outputChannel() {
+  if (!_output) _output = vscode.window.createOutputChannel("DS Autocomplete");
+  return _output;
+}
 function dbg(msg) {
   if (!config().get("debug")) return;
-  if (!_output) _output = vscode.window.createOutputChannel("DS Autocomplete");
   const t = new Date().toISOString().slice(11, 23);
-  _output.appendLine(`[${t}] ${msg}`);
+  outputChannel().appendLine(`[${t}] ${msg}`);
 }
 
 // ── Status bar ───────────────────────────────────────────────────────
@@ -533,6 +536,19 @@ function activate(context) {
   _context = context;
   loadStats();
   initStatusBar();
+  outputChannel(); // eager: channel must exist in the Output dropdown immediately
+  dbg("v1.3.5 activated, debug logging on");
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("dsAutocomplete.debug")) {
+        if (config().get("debug")) {
+          dbg("debug logging ENABLED via settings change");
+        } else {
+          outputChannel().appendLine("[debug] logging DISABLED via settings change");
+        }
+      }
+    })
+  );
 
   const provider = new DeepSeekCompletionProvider();
   const langs = config().get("enabledLanguages");
@@ -652,14 +668,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.4 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.5 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.4 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.5 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {

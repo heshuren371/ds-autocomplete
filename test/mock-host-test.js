@@ -100,6 +100,7 @@ const mockVscode = {
   workspace: {
     getConfiguration: () => ({ get: (k) => settings[k], update: async () => {} }),
     onDidChangeTextDocument: () => ({ dispose() {} }),
+    onDidChangeConfiguration: () => ({ dispose() {} }),
   },
   languages: {
     registerInlineCompletionItemProvider: (sel, provider) => {
