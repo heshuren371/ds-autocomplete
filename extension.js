@@ -523,6 +523,16 @@ let _cursorTriggerTimer = null;
 
 // ── Provider ─────────────────────────────────────────────────────────
 
+function makeCompletionItem(text, range) {
+  // Tabby pattern: attach a command that fires when the user accepts
+  // (Tab). More reliable than cursor-position heuristics.
+  return new vscode.InlineCompletionItem(text, range, {
+    title: "",
+    command: "dsAutocomplete.onAccept",
+    arguments: [],
+  });
+}
+
 class DeepSeekCompletionProvider {
   constructor() {
     this._debounceTimer = null;
@@ -552,7 +562,7 @@ class DeepSeekCompletionProvider {
       if (rem.text) {
         startRequest(rem.text, document, position);
         setGhostAnchor(document, rem.text, position);
-        return [new vscode.InlineCompletionItem(rem.text)];
+        return [makeCompletionItem(rem.text)];
       }
       return [];
     }
@@ -618,7 +628,7 @@ class DeepSeekCompletionProvider {
             }
             startRequest(remainder, document, position);
             setGhostAnchor(document, remainder, position);
-            return [new vscode.InlineCompletionItem(remainder)];
+            return [makeCompletionItem(remainder)];
           }
           // Perfect match — entire suggestion consumed
           endRequest("accepted");
@@ -655,7 +665,7 @@ class DeepSeekCompletionProvider {
               rememberSuggestion(_lastSuggestion);
               startRequest(recRem, document, position);
               setGhostAnchor(document, recRem, position);
-              return [new vscode.InlineCompletionItem(recRem)];
+              return [makeCompletionItem(recRem)];
             }
           }
         }
@@ -718,7 +728,7 @@ class DeepSeekCompletionProvider {
             };
             rememberSuggestion(_lastSuggestion);
             setGhostAnchor(document, cleaned, position);
-            resolve([new vscode.InlineCompletionItem(cleaned)]);
+            resolve([makeCompletionItem(cleaned)]);
             return;
           }
         }
@@ -755,7 +765,7 @@ class DeepSeekCompletionProvider {
           rememberSuggestion(_lastSuggestion);
           setGhostAnchor(document, cleaned, position);
 
-          const item = new vscode.InlineCompletionItem(cleaned);
+          const item = makeCompletionItem(cleaned);
           if (cfg.get("replacePartialWord")) {
             const wordRange = document.getWordRangeAtPosition(position);
             if (wordRange) item.range = wordRange;
@@ -815,7 +825,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.5.2 activated, debug logging on");
+  dbg("v1.5.3 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -839,6 +849,15 @@ function activate(context) {
       vscode.languages.registerInlineCompletionItemProvider(sel, provider)
     );
   }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dsAutocomplete.onAccept", async () => {
+      endRequest("accepted");
+      _lastSuggestion = null;
+      _ghostAnchor = null;
+      dbg("ghost accepted (Tab via command callback — Tabby pattern)");
+    })
+  );
 
   watchAcceptance(context);
 
@@ -973,14 +992,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.5.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.5.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.5.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.5.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
