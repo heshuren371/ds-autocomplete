@@ -379,6 +379,8 @@ class DeepSeekCompletionProvider {
             _lastSuggestion.text = remainder;
             _lastSuggestion.line = position.line;
             _lastSuggestion.character = position.character;
+            const itext = remainder.length > 30 ? remainder.slice(0, 30) + "…" : remainder;
+            dbg(`instant-remainder SHRANK state→${remainder.length}c @${position.line}:${position.character} [${itext}]`);
             // Reset debounce timer — we're serving instantly, no need for API
             if (this._debounceTimer) clearTimeout(this._debounceTimer);
             if (this._pendingResolve) {
@@ -389,12 +391,13 @@ class DeepSeekCompletionProvider {
           }
           // Perfect match — entire suggestion consumed
           statBump("accepted");
+          dbg("state CLEAR ≡ perfect-match (whole suggestion consumed)");
           _lastSuggestion = null;
           return [];
         }
       }
       // Typed something that doesn't match, or cursor moved elsewhere → stale
-      dbg(`instant-remainder STALE-CLEAR typedLen=${typedLen}`);
+      dbg(`state CLEAR ≡ stale typedLen=${typedLen}`);
       _lastSuggestion = null;
     }
 
@@ -443,6 +446,8 @@ class DeepSeekCompletionProvider {
           const cleaned = cleanCompletion(cached, cfg.get("multiLine"));
           if (cleaned) {
             statBump("shown");
+            const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
+            dbg(`state SET (cache) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
             _lastSuggestion = {
               text: cleaned,
               uri: document.uri.toString(),
@@ -475,6 +480,8 @@ class DeepSeekCompletionProvider {
           }
 
           statBump("shown");
+          const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
+          dbg(`state SET (API) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
           _lastSuggestion = {
             text: cleaned,
             uri: document.uri.toString(),
@@ -506,8 +513,12 @@ class DeepSeekCompletionProvider {
 function watchAcceptance(context) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
+      const cur = _lastSuggestion ? `${_lastSuggestion.text.length}c@${_lastSuggestion.line}:${_lastSuggestion.character}` : "null";
+      const chg = e.contentChanges.length ? e.contentChanges.map(c => c.text.length + "c").join(",") : "zero";
+      dbg(`watchAcceptance ENTRY state=${cur} changes=[${chg}]`);
       if (!_lastSuggestion) return;
       if (e.document.uri.toString() !== _lastSuggestion.uri) {
+        dbg("state CLEAR ≡ uri-mismatch (watchAcceptance)");
         _lastSuggestion = null;
         return;
       }
@@ -516,6 +527,7 @@ function watchAcceptance(context) {
         // Full accept (Tab): VSCode inserts the entire suggestion at once
         if (change.text === _lastSuggestion.text) {
           statBump("accepted");
+          dbg("state CLEAR ≡ Tab full-accept (watchAcceptance)");
           _lastSuggestion = null;
           return;
         }
@@ -537,7 +549,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.3.6 activated, debug logging on");
+  dbg("v1.3.7 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -627,6 +639,7 @@ function activate(context) {
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
         statBump("accepted");
+        dbg("state CLEAR ≡ partial-accept consumed all");
         _lastSuggestion = null;
       }
     })
@@ -656,6 +669,7 @@ function activate(context) {
         _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
       } else {
         statBump("accepted");
+        dbg("state CLEAR ≡ partial-accept consumed all");
         _lastSuggestion = null;
       }
     })
@@ -668,14 +682,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.6 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.7 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.6 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.7 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
