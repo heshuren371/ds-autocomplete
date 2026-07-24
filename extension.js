@@ -333,6 +333,37 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
 
 let _lastSuggestion = null; // { text, uri, line, character }
 let _pendingRemainder = null; // remainder after partial accept
+
+// ── Suggestion history (survives widget flicker, IME, races) ────────
+// When _lastSuggestion is cleared by suggest widget, IME commit,
+// or any external event, the next provider call can recover the ghost
+// text from this history — recalculating what should show based on the
+// original suggestion + current cursor position. TTL and startsWith
+// guard against serving stale/wrong completions.
+let _suggestionHistory = []; // [{text, uri, line, character, ts}]
+const HISTORY_MAX = 8;
+const HISTORY_TTL = 15000; // 15s — survives widget flicker + IME pause
+
+function rememberSuggestion(sug) {
+  _suggestionHistory.push({
+    text: sug.text, uri: sug.uri,
+    line: sug.line, character: sug.character,
+    ts: Date.now()
+  });
+  const cutoff = Date.now() - HISTORY_TTL;
+  _suggestionHistory = _suggestionHistory.filter(s => s.ts > cutoff);
+  if (_suggestionHistory.length > HISTORY_MAX) _suggestionHistory.shift();
+}
+
+function recoverSuggestion(uri, pos) {
+  for (let i = _suggestionHistory.length - 1; i >= 0; i--) {
+    const s = _suggestionHistory[i];
+    if (Date.now() - s.ts > HISTORY_TTL) continue;
+    if (s.uri !== uri || s.line !== pos.line || s.character > pos.character) continue;
+    return { text:s.text, uri:s.uri, line:s.line, character:s.character };
+  }
+  return null;
+}
 let _cursorTriggerTimer = null;
 
 // ── Provider ─────────────────────────────────────────────────────────
@@ -385,6 +416,7 @@ class DeepSeekCompletionProvider {
             _lastSuggestion.text = remainder;
             _lastSuggestion.line = position.line;
             _lastSuggestion.character = position.character;
+            rememberSuggestion(_lastSuggestion);
             const itext = remainder.length > 30 ? remainder.slice(0, 30) + "…" : remainder;
             dbg(`instant-remainder SHRANK state→${remainder.length}c @${position.line}:${position.character} [${itext}]`);
             // Reset debounce timer — we're serving instantly, no need for API
@@ -405,6 +437,34 @@ class DeepSeekCompletionProvider {
       // Typed something that doesn't match, or cursor moved elsewhere → stale
       dbg(`state CLEAR ≡ stale typedLen=${typedLen}`);
       _lastSuggestion = null;
+    }
+
+    // ── Recovery from suggestion history ──
+    // _lastSuggestion may have been cleared by suggest widget pop, IME commit,
+    // or any race. Try to recover from recent suggestions — the original
+    // anchor position lets us recalculate what the ghost text "should" be.
+    if (!_lastSuggestion) {
+      const rec = recoverSuggestion(document.uri.toString(), position);
+      if (rec) {
+        const recAnchorOff = document.offsetAt(new vscode.Position(rec.line, rec.character));
+        const recCursorOff = document.offsetAt(position);
+        const recLen = recCursorOff - recAnchorOff;
+        if (recLen >= 0 && recLen <= rec.text.length) {
+          const recTyped = document.getText(new vscode.Range(document.positionAt(recAnchorOff), position));
+          if (rec.text.startsWith(recTyped)) {
+            const recRem = rec.text.slice(recTyped.length);
+            if (recRem) {
+              dbg(`history RECOVER typed=${JSON.stringify(recTyped)} rem=${recRem.length}c`);
+              _lastSuggestion = {
+                text: recRem, uri: rec.uri,
+                line: position.line, character: position.character
+              };
+              rememberSuggestion(_lastSuggestion);
+              return [new vscode.InlineCompletionItem(recRem)];
+            }
+          }
+        }
+      }
     }
 
     if (shouldSkip(document, position)) {
@@ -460,6 +520,7 @@ class DeepSeekCompletionProvider {
               line: position.line,
               character: position.character,
             };
+            rememberSuggestion(_lastSuggestion);
             resolve([new vscode.InlineCompletionItem(cleaned)]);
             return;
           }
@@ -494,6 +555,7 @@ class DeepSeekCompletionProvider {
             line: position.line,
             character: position.character,
           };
+          rememberSuggestion(_lastSuggestion);
 
           const item = new vscode.InlineCompletionItem(cleaned);
           if (cfg.get("replacePartialWord")) {
@@ -555,7 +617,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.3.8 activated, debug logging on");
+  dbg("v1.3.9 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -688,14 +750,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.3.8 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.3.9 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.3.8 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.3.9 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
