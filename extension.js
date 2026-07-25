@@ -1,13 +1,23 @@
 const vscode = require("vscode");
 const https = require("https");
 
-// ── Config ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// dsAutocomplete — DeepSeek 代码自动补全
+//
+// 设计原则: 不浪费 token | 幽灵文跟随打字 | 双模式补全 | 状态自愈
+//
+// 数据流: 打字 → debounce(200ms) → buildFIM → requestFIM → cleanCompletion
+//        → postProcess(去重/缩进) → 幽灵文 → Tab/Cmd+Right 接受
+// ══════════════════════════════════════════════════════════════════════
 
 function config() {
   return vscode.workspace.getConfiguration("dsAutocomplete");
 }
 
-// ── Debug log (Output channel: "DS Autocomplete") ───────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 调试日志 — 输出到 "DS Autocomplete" 面板
+// 只有设置开 debug 才输出；自带 2 秒去重防止刷屏
+// ══════════════════════════════════════════════════════════════════════
 
 let _output = null;
 let _lastDbgMsg = "";
@@ -27,7 +37,9 @@ function dbg(msg) {
   outputChannel().appendLine(`[${t}] ${msg}`);
 }
 
-// ── Status bar ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 状态栏 — 右下角显示模型名，点击切换；语言禁用时显示 ⊘
+// ══════════════════════════════════════════════════════════════════════
 
 let _statusBar = null;
 let _statusTimer = null;
@@ -77,7 +89,10 @@ function flashError(text) {
   showStatus(text, "$(error)", 5000);
 }
 
-// ── Stats (persisted locally, no telemetry) ─────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 补全统计 — 本地持久化，不上传
+// shown/accepted/rejected/cacheHits/requests/tokensUsed
+// ══════════════════════════════════════════════════════════════════════
 
 let _context = null;
 let _stats = { shown: 0, accepted: 0, rejected: 0, cacheHits: 0, requests: 0, retries: 0, tokensUsed: 0 };
@@ -100,7 +115,9 @@ function statBump(key, n = 1) {
   saveStats();
 }
 
-// ── Cache (LRU + TTL) ────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 补全缓存 — 相同上下文 5 分钟内秒回，key = 模型+prefix尾+suffix头
+// ══════════════════════════════════════════════════════════════════════
 
 const CACHE_MAX = 120;
 const CACHE_TTL = 5 * 60 * 1000;
@@ -113,7 +130,7 @@ function hashStr(s) {
 }
 
 function cacheKey(prefix, suffix, model) {
-  // Only the tail of the prefix and head of the suffix affect the completion
+  // 缓存 key: prefix 末尾 1500 + suffix 开头 400
   return model + "|" + hashStr(prefix.slice(-1500)) + "|" + hashStr(suffix.slice(0, 400));
 }
 
@@ -124,7 +141,7 @@ function cacheGet(key) {
     _cache.delete(key);
     return null;
   }
-  // LRU touch
+  // LRU 访问更新
   _cache.delete(key);
   _cache.set(key, hit);
   statBump("cacheHits");
@@ -140,17 +157,21 @@ function cacheSet(key, text) {
   }
 }
 
-// ── Context filter (conservative) ───────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 上下文过滤 — 不该补全的场景返回 true 跳过
+// 场景1: 空文件光标在开头（无上下文可猜）
+// 场景2: 光标在字符串内且引号为奇数（默认关闭，FIM 模型自己能处理）
+// ══════════════════════════════════════════════════════════════════════
 
 function shouldSkip(document, position) {
-  // 1) Nothing before cursor at all (empty file)
+  // 场景1: 空文件光标在开头
   const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position)).trim();
   if (!before) return true;
 
-  // 2) Cursor inside an unterminated string literal — OPT-IN only (skipInString).
-  // Half-typed lines usually carry an open quote (`print("hel`), and FIM models
-  // complete string interiors natively. Skipping here silently killed the most
-  // wanted completions, so this filter is OFF by default.
+  // 场景2: 光标在字符串内（默认关闭）
+  // 开着会杀掉 print("hello 这类最需要的补全
+  // 所以默认关闭
+
   if (config().get("skipInString")) {
     const linePrefix = document.lineAt(position.line).text.slice(0, position.character);
     const singles = (linePrefix.match(RE_SINGLE_QUOTE) || []).length;
@@ -162,7 +183,9 @@ function shouldSkip(document, position) {
   return false;
 }
 
-// ── Compiled regex (module scope — avoid recompiling on every call) ──
+// ══════════════════════════════════════════════════════════════════════
+// 正则编译到模块顶层 — JS 正则每次用都重新编译，这里编译一次复用
+// ══════════════════════════════════════════════════════════════════════
 
 const RE_FIM_END = /<｜fim▁end｜>/g;
 const RE_FIM_BEGIN = /<｜fim▁begin｜>/g;
@@ -177,9 +200,11 @@ const RE_EARLY_BOUNDARY = /[)\]}'"\s,;]$/;
 const RE_DOUBLENEWLINE_END = /\n\n$/;
 const RE_WHITESPACE_WORD = /^\s*\S+/;
 
-// ── Document cache (avoid import scanning on every keystroke) ───────
-// VSCode's document.getText() is already cheap (native); imports scanning
-// with split() is the expensive part. Cache imports per (uri, version).
+// ══════════════════════════════════════════════════════════════════════
+// imports 缓存 — getText() 便宜，扫 imports 贵。按 (uri,version) 缓存
+// ══════════════════════════════════════════════════════════════════════
+// getText() 便宜，扫 imports 贵
+
 
 let _importCache = { uri: "", version: -1, imports: "" };
 
@@ -210,9 +235,12 @@ function extractImportsFast(text) {
   return imports.length > 0 ? imports.join("\n") + "\n\n" : "";
 }
 
-// ── Comment-to-code mode (Copilot Next Edit Suggestion) ──────────────
-// When cursor follows a comment block, switch from FIM to chat/completions.
-// The model interprets comments as implementation instructions.
+// ══════════════════════════════════════════════════════════════════════
+// 注释转代码 — Copilot 同款 Next Edit Suggestion
+// 光标在注释后 → 模型把注释当指令执行，生成实现代码（走 chat API）
+// ══════════════════════════════════════════════════════════════════════
+// 注释后自动切 chat API
+// 模型把注释当指令执行
 
 function isCommentBlock(document, position) {
   const cfg = config();
@@ -222,7 +250,7 @@ function isCommentBlock(document, position) {
   const line = document.lineAt(position.line).text;
   const trimmed = line.slice(0, position.character).trim();
 
-  // Cursor on an empty line after a comment → generate implementation
+  // 注释后空行 → 触发
   if (trimmed.length === 0) {
     if (position.line > 0) {
       const prev = document.lineAt(position.line - 1).text.trim();
@@ -231,14 +259,14 @@ function isCommentBlock(document, position) {
       }
     }
     if (position.line === 0) return false;
-    // Cursor at first column on a blank line after comment block
+    // 注释块后第一行第一列
     return false;
   }
 
-  // Cursor on a comment line → generate the next line of code
+  // 注释行上 → 生成下一行
   if (trimmed.startsWith("#")) return true;
 
-  // Cursor right after a comment line → e.g. "# 功能: xxx" + newline + "|"
+  // 注释行下一行开头
   if (position.line > 0 && position.character === 0) {
     const prev = document.lineAt(position.line - 1).text.trim();
     if (prev.startsWith("#")) return true;
@@ -247,12 +275,15 @@ function isCommentBlock(document, position) {
   return false;
 }
 
-// ── FIM prompt ───────────────────────────────────────────────────────
-// Professional inline completions (PyCharm/Cursor/Copilot) don't just
-// send raw text around cursor. They include file-level context:
-//   - File path + language annotation
-//   - Import statements (model needs to know available symbols)
-//   - Natural boundary alignment (start at function/class def, not mid-word)
+// ══════════════════════════════════════════════════════════════════════
+// FIM 提示词构造 — prefix(上文) + suffix(下文) + header(文件路径+imports)
+// prefix 从函数/类开头截断（不是从中间随机字符开始）
+// ══════════════════════════════════════════════════════════════════════
+// 对齐 PyCharm/Cursor/Copilot 的上下文策略
+
+//   - 文件路径标注
+//   - import 语句（模型知道可用模块）
+//   - 从函数/类开头截断
 
 const path = require("path");
 
@@ -320,7 +351,9 @@ function buildFIM(document, position) {
   return { prompt: prefix, suffix: suffix };
 }
 
-// ── Response cleaner ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 补全结果清洗 — 去 FIM token/markdown/多余空行
+// ══════════════════════════════════════════════════════════════════════
 
 function cleanCompletion(text, multiLine) {
   let cleaned = text
@@ -336,7 +369,9 @@ function cleanCompletion(text, multiLine) {
   return cleaned;
 }
 
-// ── Post-processing: dedup + fix indentation ─────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 后处理 — 去重(模型把下文重抄) + 缩进对齐(模型不知道你在几层)
+// ══════════════════════════════════════════════════════════════════════
 
 function postProcessCompletion(cleaned, document, position) {
   if (!cleaned) return cleaned;
@@ -395,7 +430,9 @@ function postProcessCompletion(cleaned, document, position) {
   return cleaned;
 }
 
-// ── API: streaming with early exit + retry ──────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// DeepSeek FIM API — SSE 流式 + 早停(5-8 token) + 429/5xx 重试
+// ══════════════════════════════════════════════════════════════════════
 
 let _activeRequest = null;
 
@@ -548,9 +585,11 @@ function requestFIM(prompt, suffix, cancelToken) {
   });
 }
 
-// ── Chat API for comment-to-code (Copilot Next Edit Suggestion) ───────
+// ══════════════════════════════════════════════════════════════════════
+// Chat API — 注释转代码专用。FIM=文本填空，Chat=指令执行
+// ══════════════════════════════════════════════════════════════════════
 // When the cursor follows a comment block, switch from FIM to chat/completions.
-// The model interprets comments as implementation instructions.
+// 模型把注释当指令执行
 
 function requestCommentToCode(document, position, cancelToken) {
   const cfg = config();
@@ -682,7 +721,9 @@ async function evaluateFIM(prompt, suffix, cancelToken) {
   }
 }
 
-// ── Request lifecycle tracking (Copilot pattern) ────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 请求生命周期 — UUID 追踪 shown→accepted/rejected/ignored
+// ══════════════════════════════════════════════════════════════════════
 // Each suggestion gets a UUID; tracked through show→accept/reject/ignore.
 // Used for quality telemetry — understanding WHY a suggestion didn't get used.
 let _requestUuid = 0;
@@ -716,10 +757,12 @@ function endRequest(status) {
 let _lastSuggestion = null; // { text, uri, line, character }
 let _pendingRemainder = null; // remainder after partial accept
 
-// ── Ghost text acceptance tracker (Continue/Copilot pattern) ─────────
-// When ghost text is shown, record the expected end position.
-// On cursor movement to that position → acceptance (Tab or typed-all).
-// On cursor movement elsewhere → rejection (counter for quality tracking).
+// ══════════════════════════════════════════════════════════════════════
+// 幽灵文接受追踪 — 光标移到幽灵文末尾+文本匹配=接受，移开=拒绝
+// ══════════════════════════════════════════════════════════════════════
+// 补全展示时记录幽灵文结束位置
+// 光标移到末尾 → 接受
+// 光标移开 → 拒绝
 let _ghostAnchor = null; // { uri, text, startLine, startCharacter, endLine, endCharacter }
 
 function setGhostAnchor(document, text, startPosition) {
@@ -755,12 +798,14 @@ function checkGhostAccepted(document, newPosition) {
   return false;
 }
 
-// ── Suggestion history (survives widget flicker, IME, races) ────────
-// When _lastSuggestion is cleared by suggest widget, IME commit,
-// or any external event, the next provider call can recover the ghost
-// text from this history — recalculating what should show based on the
-// original suggestion + current cursor position. TTL and startsWith
-// guard against serving stale/wrong completions.
+// ══════════════════════════════════════════════════════════════════════
+// 建议历史 — 幽灵文的后悔药。widget/IME/竞态清掉的状态，从历史恢复
+// ══════════════════════════════════════════════════════════════════════
+// _lastSuggestion 被 widget/IME/竞态清掉时
+// 从历史恢复幽灵文
+
+// TTL 15 秒，startsWith 防错配
+
 let _suggestionHistory = []; // [{text, uri, line, character, ts}]
 const HISTORY_MAX = 8;
 const HISTORY_TTL = 15000; // 15s — survives widget flicker + IME pause
@@ -787,7 +832,11 @@ function recoverSuggestion(uri, pos) {
 }
 let _cursorTriggerTimer = null;
 
-// ── Provider ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 补全提供者 — 核心入口
+// 优先级: selectedCompletionInfo→_pendingRemainder→_lastSuggestion
+//        →历史恢复→debounce→API
+// ══════════════════════════════════════════════════════════════════════
 
 function makeCompletionItem(text, range) {
   // Tabby pattern: attach a command that fires when the user accepts
@@ -843,11 +892,11 @@ class DeepSeekCompletionProvider {
     }
 
     // ── VSCode-native ghost-text tracking (Continue's approach) ──
-    // When ghost text is visible, VSCode provides selectedCompletionInfo with
-    // the full completion text and the Range from the original position to
-    // the current cursor. This is the AUTHORITATIVE source — no race with
-    // our module-level _lastSuggestion. See: continuedev/continue —
-    // extensions/vscode/src/autocomplete/completionProvider.ts:187-205
+    // 幽灵文可见时 VSCode 传权威状态
+    // text=完整补全，range=锚点→光标
+    // 权威状态，零竞态
+
+    // Continue completionProvider.ts:187-205
     if (context.selectedCompletionInfo) {
       const { text, range } = context.selectedCompletionInfo;
       const typed = document.getText(range);
@@ -918,9 +967,9 @@ class DeepSeekCompletionProvider {
     }
 
     // ── Recovery from suggestion history ──
-    // _lastSuggestion may have been cleared by suggest widget pop, IME commit,
-    // or any race. Try to recover from recent suggestions — the original
-    // anchor position lets us recalculate what the ghost text "should" be.
+    // _lastSuggestion 被 widget/IME 清掉
+    // 从历史恢复
+
     if (!_lastSuggestion) {
       const rec = recoverSuggestion(document.uri.toString(), position);
       if (rec) {
@@ -1088,7 +1137,9 @@ class DeepSeekCompletionProvider {
   }
 }
 
-// ── Acceptance tracking ──────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 接受追踪 — 监听文档变化，检测 Tab 全接受（change.text 完全匹配）
+// ══════════════════════════════════════════════════════════════════════
 
 function watchAcceptance(context) {
   context.subscriptions.push(
@@ -1104,25 +1155,27 @@ function watchAcceptance(context) {
       }
       for (const change of e.contentChanges) {
         if (!change.text || !_lastSuggestion) continue;
-        // Full accept (Tab): VSCode inserts the entire suggestion at once
+        // Tab 全接受: VSCode 把幽灵文全部插入
         if (change.text === _lastSuggestion.text) {
           endRequest("accepted");
           dbg("state CLEAR ≡ Tab full-accept (watchAcceptance)");
           _lastSuggestion = null;
           return;
         }
-        // DO NOT clear on non-matching edits here. This listener races with the
-        // provider's instant-remainder: when the document event arrives AFTER the
-        // provider already shrank _lastSuggestion.text past this edit, startsWith
-        // misfires and nukes valid state (the "ghost text vanishes on every
-        // keystroke" bug — debug log 2026-07-24). The provider's own stale check
-        // (typed text from anchor→cursor vs suggestion) is the single source of truth.
+        // 不要在非匹配编辑时清状态（和 provider 竞态）
+        // provider 的即时收缩是单一事实来源
+
+
+
+
       }
     })
   );
 }
 
-// ── Activation ───────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+// 扩展激活入口 — VSCode 启动时调用，初始化所有组件
+// ══════════════════════════════════════════════════════════════════════
 
 function activate(context) {
   _context = context;
@@ -1166,26 +1219,26 @@ function activate(context) {
 
   watchAcceptance(context);
 
-  // Update status bar when switching editors (per-language indicator)
+  // 切换编辑器时更新状态栏语言指示
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(() => updateStatusBarModel())
   );
 
-  // Auto-trigger: cursor inside empty parens — user typed `print()` then
-  // arrowed in; no-text-change = no normal trigger. Detect and fire.
+  // 空括号自动触发: 用户打了 () 后光标在中间
+  // VSCode 不重新触发 → 手动检测并触发
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((e) => {
       // ── Ghost text acceptance detection (Continue/Copilot pattern) ──
-      // Cursor moved — check if it landed at the expected ghost-text end
-      // position. If yes and the document confirms the text was inserted,
-      // it was an acceptance (Tab or typed-all-chars).
+      // 光标移动 → 检查是否在幽灵文末尾
+      // 末尾+文本匹配 → 接受
+      // 不在末尾 → 拒绝
       const editor = e.textEditor;
       const pos = editor.selection.active;
       if (checkGhostAccepted(editor.document, pos)) {
         endRequest("accepted");
         dbg("ghost accepted (cursor at ghost end + text match)");
         _lastSuggestion = null;
-        // Fall through to the rest of the handler (empty-paren trigger below)
+        // 继续执行空括号触发
         return;
       }
       // Cursor moved elsewhere while ghost was showing → rejection
@@ -1246,8 +1299,8 @@ function activate(context) {
 
       await editor.edit((eb) => eb.insert(editor.selection.active, word + trailingSpace));
 
-      // Guard: _lastSuggestion may have been nullified by a provider call
-      // triggered during the edit (instant-remainder → perfect match → clear).
+      // _lastSuggestion 可能在 edit 期间被异步清掉
+
       if (!_lastSuggestion) return;
 
       const remainder = after.slice(trailingSpace.length);
