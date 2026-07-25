@@ -397,29 +397,63 @@ function postProcessCompletion(cleaned, document, position) {
     const cursorIndent = cursorLine.match(/^(\s*)/)[1];
     const charIdx = position.character;
 
-    // If cursor is inside indentation or at column 0 of indented line,
-    // align the completion's first non-empty line
+    // Only fix when cursor is on an indented line (column 0 or inside indent)
     if (charIdx <= cursorIndent.length) {
       const lines = cleaned.split("\n");
-      // Find the typical indent level from surrounding code
+
+      // Detect document's indentation unit (tabs or spaces)
+      // Scan nearby lines for leading whitespace patterns
+      let indentUnit = "    "; // fallback: 4 spaces
+      let useTabs = false;
       const docLines = document.getText().split("\n");
-      let baseIndent = "    "; // fallback
-      for (let i = Math.max(0, position.line - 5); i < position.line; i++) {
+      const spaceCounts = {};
+      let tabCount = 0;
+      for (let i = 0; i < Math.min(docLines.length, 50); i++) {
         const m = docLines[i].match(/^(\s+)\S/);
-        if (m) { baseIndent = m[1]; break; }
+        if (!m) continue;
+        if (m[1].startsWith("\t")) { tabCount++; continue; }
+        const len = m[1].length;
+        spaceCounts[len] = (spaceCounts[len] || 0) + 1;
       }
-      // Rebase multi-line completions to match document indentation
+      if (tabCount > 0 && tabCount > (Object.values(spaceCounts).reduce((a, b) => a + b, 0) || 0)) {
+        useTabs = true;
+        indentUnit = "\t";
+      } else if (Object.keys(spaceCounts).length > 0) {
+        // Most common space count = base unit
+        const mostCommon = Object.entries(spaceCounts).sort((a, b) => b[1] - a[1])[0][0];
+        indentUnit = " ".repeat(mostCommon);
+      }
+
+      // Find the first non-empty line in the completion
       const firstNonEmpty = lines.findIndex(l => l.trim().length > 0);
       if (firstNonEmpty >= 0) {
-        const modelIndent = lines[firstNonEmpty].match(/^(\s*)/)[1];
-        const targetIndent = cursorIndent + baseIndent;
+        // Model's indent for the first line (its "anchor" indent)
+        const modelFirstIndent = lines[firstNonEmpty].match(/^(\s*)/)[1];
+
+        // Target: first line aligns with cursor's indent
+        // Subsequent lines: keep model's relative indent, rebased to cursor
         for (let i = firstNonEmpty; i < lines.length; i++) {
           if (lines[i].trim().length === 0) continue;
-          const rel = lines[i].length - lines[i].trimStart().length;
-          const relIndent = lines[i].slice(0, Math.min(rel, lines[i].length - lines[i].trimStart().length));
-          // Relative indent level (model-generated) + base target indent
-          const level = Math.round((relIndent.length - modelIndent.length) / baseIndent.length);
-          const newIndent = targetIndent + baseIndent.repeat(Math.max(0, level + (i > firstNonEmpty ? 0 : -1)));
+          const lineIndent = lines[i].match(/^(\s*)/)[1];
+
+          // Relative indent from model's first line
+          // positive = deeper than first line, negative = shallower (dedent)
+          const relDepth = lineIndent.length - modelFirstIndent.length;
+
+          let newIndent;
+          if (relDepth >= 0) {
+            // Deeper than first line: cursor indent + relative depth
+            const addUnits = useTabs
+              ? Math.round(relDepth / 4)          // spaces→tabs
+              : Math.round(relDepth / unitLen);
+            newIndent = cursorIndent + indentUnit.repeat(Math.max(0, addUnits));
+          } else {
+            // Shallower (dedent): reduce cursor indent by |relDepth|
+            const subUnits = Math.round(Math.abs(relDepth) / unitLen);
+            const totalUnits = Math.max(0, Math.round(cursorIndent.length / unitLen) - subUnits);
+            newIndent = indentUnit.repeat(totalUnits);
+          }
+
           lines[i] = newIndent + lines[i].trimStart();
         }
         cleaned = lines.join("\n");
