@@ -453,7 +453,36 @@ async function run() {
     `T14: 跨行闭合括号必须保留, got ${JSON.stringify(items14[0]?.insertText)}`);
   console.log("✓ T14 复读截断 + 括号配平(截断丢弃/跨行闭合保留)");
 
-  console.log("\nALL 14 TESTS PASSED");
+  // ── T15: P3 最近编辑注入 prompt ──
+  // 用户在别处改过的代码是"下一步改什么"的最强信号，必须出现在头部
+  // 同时验证：光标处编辑排除(已在prefix) + 同文件远处编辑保留 + 跨文件注入
+  function recentSection(prompt) {
+    const m = prompt.match(/# 最近编辑:\n((?:#   .*\n?)+)/);
+    return m ? m[1] : "";
+  }
+  requestCount = 0;
+  sseResponseText = "pass";
+  const docT15 = new FakeDocument("x = 1\ny = 2\nz = ");
+  const otherDoc = new FakeDocument("import db\nconn = db.connect(host)\n");
+  for (const fn of docListeners) {
+    fn({ document: otherDoc, contentChanges: [{ text: "db.connect(host)", range: { start: new Position(1, 7), end: new Position(1, 18) } }] });
+  }
+  await capturedProvider.provideInlineCompletionItems(docT15, new Position(2, 5), auto, cancelToken());
+  const sec15 = recentSection((lastRequestBody && lastRequestBody.prompt) || "");
+  assert(sec15.includes("db.connect(host)"), `T15: 跨文件最近编辑必须注入, got section: ${sec15 || "(empty)"}`);
+
+  const docT15b = new FakeDocument("aaa\nbbb\nccc\n");
+  for (const fn of docListeners) {
+    fn({ document: docT15b, contentChanges: [{ text: "x", range: { start: new Position(0, 0), end: new Position(0, 0) } }] });
+    fn({ document: docT15b, contentChanges: [{ text: "x", range: { start: new Position(2, 3), end: new Position(2, 3) } }] });
+  }
+  await capturedProvider.provideInlineCompletionItems(docT15b, new Position(2, 4), auto, cancelToken());
+  const sec15b = recentSection((lastRequestBody && lastRequestBody.prompt) || "");
+  assert(sec15b.includes("aaa"), `T15: 同文件远处编辑必须保留, got: ${sec15b}`);
+  assert(!sec15b.includes("ccc"), `T15: 光标处编辑必须排除(已在prefix), got: ${sec15b}`);
+  console.log("✓ T15 最近编辑注入(跨文件+远处保留+光标处排除)");
+
+  console.log("\nALL 15 TESTS PASSED");
   process.exit(0);
 }
 

@@ -297,6 +297,65 @@ function getCachedOutline(document) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// P3 最近编辑注入 — Continue recentlyEdited 的轻量版
+// 用户刚改过的代码是"下一步要改什么"的最强信号（Cursor 核心卖点）
+// 全局环形缓冲跨文件生效；写进 prompt 头部注释
+// 预算硬顶 300 字符，防爆 token
+// ══════════════════════════════════════════════════════════════════════
+
+const _recentEdits = []; // {uri, filename, line, text, ts}
+const RECENT_EDITS_MAX = 20;
+const RECENT_EDITS_TTL_MS = 120000;   // 2 分钟前的编辑不算"最近"
+const RECENT_EDITS_BUDGET = 300;
+
+function trackEdit(document, contentChanges) {
+  if (!contentChanges || contentChanges.length === 0) return;
+  if (typeof document.lineAt !== "function") return; // mock 部分事件无完整文档
+  const uri = document.uri.toString();
+  const filename = document.uri.fsPath
+    ? path.basename(document.uri.fsPath)
+    : uri.split("/").pop();
+  for (const change of contentChanges) {
+    const line = change.range?.start?.line;
+    if (line === undefined) continue; // 无法定位的编辑不追踪
+    // 快照改动后的整行（比 diff 片段可读，模型看得懂上下文）
+    const lineText = ((document.lineAt(line) || {}).text || "").trim();
+    if (!lineText) continue;
+    // 同行的打字爆发只留最新快照（5 次按键 = 1 条记录）
+    const last = _recentEdits[_recentEdits.length - 1];
+    if (last && last.uri === uri && last.line === line) {
+      last.text = lineText;
+      last.ts = Date.now();
+    } else {
+      _recentEdits.push({ uri, filename, line, text: lineText, ts: Date.now() });
+      if (_recentEdits.length > RECENT_EDITS_MAX) _recentEdits.shift();
+    }
+  }
+}
+
+function formatRecentEdits(document, position) {
+  const now = Date.now();
+  const curUri = document.uri.toString();
+  // 排除光标±1行的编辑——那部分内容已经在 prefix 里了，重复注入浪费 token
+  // 最近编辑的价值在于 prefix 窗口看不到的地方：其他文件、同文件远处
+  const fresh = _recentEdits.filter(e =>
+    now - e.ts < RECENT_EDITS_TTL_MS &&
+    !(e.uri === curUri && Math.abs(e.line - position.line) <= 1)
+  );
+  if (fresh.length === 0) return "";
+  const out = [];
+  let used = 0;
+  for (let i = fresh.length - 1; i >= 0 && out.length < 5; i--) {
+    const e = fresh[i];
+    const entry = `#   ${e.filename}:${e.line + 1}: ${e.text}`;
+    if (used + entry.length > RECENT_EDITS_BUDGET) break;
+    out.unshift(entry);
+    used += entry.length;
+  }
+  return out.length ? `# 最近编辑:\n${out.join("\n")}\n` : "";
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 注释转代码 — Copilot 同款 Next Edit Suggestion
 // 光标在注释后 → 模型把注释当指令执行，生成实现代码（走 chat API）
 // ══════════════════════════════════════════════════════════════════════
@@ -361,6 +420,8 @@ function buildContextHeader(document, position) {
   // P1: 符号大纲——模型调函数不瞎编名字
   const outline = getCachedOutline(document);
   if (outline) header += `# 符号: ${outline}\n`;
+  // P3: 最近编辑——用户刚改过的代码是"下一步改什么"的最强信号
+  if (position) header += formatRecentEdits(document, position);
   return header;
 }
 
@@ -1297,6 +1358,12 @@ class DeepSeekCompletionProvider {
 // ══════════════════════════════════════════════════════════════════════
 
 function watchAcceptance(context) {
+  // P3: 编辑追踪独立注册——即使 watchAcceptance 提前 return 也不漏记
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      try { trackEdit(e.document, e.contentChanges); } catch {}
+    })
+  );
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
       const cur = _lastSuggestion ? `${_lastSuggestion.text.length}c@${_lastSuggestion.line}:${_lastSuggestion.character}` : "null";
@@ -1337,7 +1404,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.7.0 activated, debug logging on");
+  dbg("v1.8.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1511,14 +1578,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.7.0 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.8.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.7.0 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.8.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
