@@ -45,7 +45,8 @@ class FakeDocument {
   constructor(text, lang = "python") {
     this.text = text;
     this.languageId = lang;
-    this.uri = { toString: () => "file:///test." + lang };
+    const id = FakeDocument._nextId++;
+    this.uri = { toString: () => `file:///test_${id}.${lang}` };
     this.version = 0;
   }
   getText(range) {
@@ -67,7 +68,10 @@ class FakeDocument {
     }
     return new Position(lines.length - 1, lines[lines.length - 1].length);
   }
-  lineAt(line) { return { text: this.text.split("\n")[line] }; }
+  lineAt(line) {
+    const lines = this.text.split("\n");
+    return { text: lines[line] !== undefined ? lines[line] : "" };
+  }
   getWordRangeAtPosition(pos) {
     const line = this.lineAt(pos.line).text;
     let s = pos.character, e = pos.character;
@@ -78,6 +82,7 @@ class FakeDocument {
     return new Range(new Position(pos.line, s), new Position(pos.line, e));
   }
 }
+FakeDocument._nextId = 1;
 
 // ── captured state ──
 let capturedProvider = null;
@@ -337,6 +342,7 @@ async function run() {
   assert(items.length === 1, "T10 setup: ghost shown");
   // User types "s": provider shrinks FIRST (instant-remainder)
   const docT10 = new FakeDocument("total = 0\nresult = s");
+  docT10.uri = doc.uri; // same doc, modified in place
   items = await capturedProvider.provideInlineCompletionItems(
     docT10, new Position(1, 10), auto, cancelToken());
   assert(items.length === 1 && items[0].insertText === "um = a + b",

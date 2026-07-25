@@ -377,8 +377,9 @@ function postProcessCompletion(cleaned, document, position) {
   if (!cleaned) return cleaned;
 
   // 1. Dedup — trim prefix that already appears right after cursor
+  const endPos = document.positionAt(document.getText().length);
   const suffix = document.getText(
-    new vscode.Range(position, new vscode.Position(document.lineCount, 0))
+    new vscode.Range(position, endPos)
   );
   if (suffix) {
     // Google each prefix length from longest to shortest
@@ -393,7 +394,9 @@ function postProcessCompletion(cleaned, document, position) {
 
   // 2. Fix indentation — match cursor's line indentation level
   if (cleaned.includes("\n")) {
-    const cursorLine = document.lineAt(position.line).text;
+    const lineObj = document.lineAt(position.line);
+    if (!lineObj || !lineObj.text) return cleaned; // 光标行超出文档范围（mock/竞态）
+    const cursorLine = lineObj.text;
     const cursorIndent = cursorLine.match(/^(\s*)/)[1];
     const charIdx = position.character;
 
@@ -630,6 +633,9 @@ function requestCommentToCode(document, position, cancelToken) {
   const key = cfg.get("apiKey");
   if (!key) return Promise.reject(new Error("No API key"));
 
+  // Kill any in-flight FIM request — chat API takes over
+  if (_activeRequest) { _activeRequest.destroy(); _activeRequest = null; }
+
   const full = document.getText();
   const offset = document.offsetAt(position);
 
@@ -845,6 +851,13 @@ const HISTORY_MAX = 8;
 const HISTORY_TTL = 15000; // 15s — survives widget flicker + IME pause
 
 function rememberSuggestion(sug) {
+  // Dedup: same text at same position → just update timestamp
+  const last = _suggestionHistory[_suggestionHistory.length - 1];
+  if (last && last.text === sug.text && last.uri === sug.uri &&
+      last.line === sug.line) {
+    last.ts = Date.now();
+    return;
+  }
   _suggestionHistory.push({
     text: sug.text, uri: sug.uri,
     line: sug.line, character: sug.character,
@@ -1161,7 +1174,7 @@ class DeepSeekCompletionProvider {
         } catch (err) {
           updateStatusBarModel();
           if (err.message !== "canceled") {
-            console.error("[DS Autocomplete]", err.message);
+            console.error("[DS Autocomplete]", err.message, err.stack?.slice(0, 300));
             flashError(`DS: ${String(err.message).slice(0, 40)}`);
           }
           resolve([]);
@@ -1216,7 +1229,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.6.3 activated, debug logging on");
+  dbg("v1.6.4 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1390,14 +1403,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.6.3 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.6.4 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.6.3 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.6.4 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
