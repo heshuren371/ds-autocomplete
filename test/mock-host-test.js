@@ -403,7 +403,57 @@ async function run() {
   assert.strictEqual(requestCount, 2, "T12: after ghost acceptance, new API call issued (not instant remainder)");
   console.log("✓ T12 ghost text acceptance detection — cursor at ghost end + text match = accepted");
 
-  console.log("\nALL 12 TESTS PASSED");
+  // ── T13: P0 作用域链 + P1 符号大纲写进 prompt 头部 ──
+  // 光标在 class > def 内部时，prompt 必须包含作用域链和符号列表，
+  // 模型才知道 self/参数名、不瞎编函数名
+  sseResponseText = "pass";
+  requestCount = 0;
+  const docT13 = new FakeDocument(
+    "import os\n\n" +
+    "class Student:\n" +
+    "    def __init__(self, name):\n" +
+    "        self.name = name\n" +
+    "\n" +
+    "    def add_score(self, s):\n" +
+    "        \n" +
+    "\n" +
+    "def helper(x):\n" +
+    "    return x"
+  );
+  await capturedProvider.provideInlineCompletionItems(docT13, new Position(7, 8), auto, cancelToken());
+  const prompt13 = (lastRequestBody && lastRequestBody.prompt) || "";
+  assert(prompt13.includes("# 作用域: class Student: > def add_score(self, s):"),
+    `T13: prompt 缺作用域链, got:\n${prompt13.slice(0, 300)}`);
+  assert(prompt13.includes("# 符号:") && prompt13.includes("class Student") && prompt13.includes("def helper(x)"),
+    `T13: prompt 缺符号大纲, got:\n${prompt13.slice(0, 300)}`);
+  assert(prompt13.includes("import os"), "T13: imports 保留");
+  console.log("✓ T13 作用域链+符号大纲注入 prompt 头部");
+
+  // ── T14: P2a 复读循环截断 + P2b 末行括号不平衡丢弃 ──
+  sseResponseText = "total = 0\ntotal += 1\ntotal += 1\ntotal += 1\ntotal += 1";
+  requestCount = 0;
+  const docT14 = new FakeDocument("def calc():\n    ");
+  let items14 = await capturedProvider.provideInlineCompletionItems(docT14, new Position(1, 4), auto, cancelToken());
+  const text14 = String(items14[0].insertText);
+  const occur14 = (text14.match(/total \+= 1/g) || []).length;
+  assert(occur14 <= 2, `T14: 复读循环必须截断到 ≤2 次, got ${occur14}: ${JSON.stringify(text14)}`);
+
+  sseResponseText = "result = compute(\n    x + y";
+  const docT14b = new FakeDocument("def f():\n    ");
+  items14 = await capturedProvider.provideInlineCompletionItems(docT14b, new Position(1, 4), auto, cancelToken());
+  const text14b = items14.length ? String(items14[0].insertText) : "";
+  assert((text14b.match(/\(/g) || []).length <= (text14b.match(/\)/g) || []).length,
+    `T14: 括号不平衡必须丢到配平或丢弃, got ${JSON.stringify(text14b)}`);
+
+  // 反向用例：跨行闭合的括号必须保留（防过度截断）
+  sseResponseText = "data = [\n    1,\n    2,\n]";
+  const docT14c = new FakeDocument("def g():\n    ");
+  items14 = await capturedProvider.provideInlineCompletionItems(docT14c, new Position(1, 4), auto, cancelToken());
+  assert(items14.length === 1 && String(items14[0].insertText).includes("]"),
+    `T14: 跨行闭合括号必须保留, got ${JSON.stringify(items14[0]?.insertText)}`);
+  console.log("✓ T14 复读截断 + 括号配平(截断丢弃/跨行闭合保留)");
+
+  console.log("\nALL 14 TESTS PASSED");
   process.exit(0);
 }
 

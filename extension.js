@@ -236,6 +236,67 @@ function extractImportsFast(text) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// P0 作用域链 — 光标在哪个 class > def 里
+// 长函数被 maxPrefixChars 截断后，def 行就丢了，模型不知道自己在哪个函数里
+// 把作用域链写进 prompt 头部，模型就知道该用什么 self/参数名
+// ══════════════════════════════════════════════════════════════════════
+
+function findScopeChain(document, position) {
+  // 估计光标处的上下文缩进：
+  // 空行时光标列(VSCode auto-indent 已放好)和上方非空行缩进取大者
+  const curLine = (document.lineAt(position.line) || {}).text || "";
+  let ctxIndent;
+  if (curLine.trim().length === 0) {
+    let aboveIndent = 0;
+    for (let i = position.line - 1; i >= 0; i--) {
+      const t = (document.lineAt(i) || {}).text || "";
+      if (t.trim().length > 0) { aboveIndent = t.match(/^\s*/)[0].length; break; }
+    }
+    ctxIndent = Math.max(position.character, aboveIndent);
+  } else {
+    ctxIndent = curLine.match(/^\s*/)[0].length;
+  }
+  if (ctxIndent === 0) return []; // 模块级，无外层作用域
+
+  // 向上找缩进逐级减小的 def/class —— 那些才是包住光标的作用域
+  const chain = [];
+  let bound = ctxIndent;
+  for (let i = position.line - 1; i >= 0 && chain.length < 4; i--) {
+    const t = (document.lineAt(i) || {}).text || "";
+    const m = t.match(/^(\s*)(?:async\s+def|def|class)\s+\w+/);
+    if (m && m[1].length < bound) {
+      chain.unshift(t.trim());
+      bound = m[1].length;
+      if (bound === 0) break;
+    }
+  }
+  return chain;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// P1 文件符号大纲 — 文件里所有 def/class 签名
+// 模型调函数不瞎编名字（Copilot neighboring tabs 的轻量版）
+// 缓存同 imports：(uri, version) 失效重扫
+// ══════════════════════════════════════════════════════════════════════
+
+let _outlineCache = { uri: "", version: -1, text: "" };
+
+function getCachedOutline(document) {
+  const uri = document.uri.toString();
+  if (_outlineCache.uri === uri && _outlineCache.version === document.version) {
+    return _outlineCache.text;
+  }
+  const sigs = [];
+  for (const line of document.getText().split("\n")) {
+    const m = line.match(/^\s*(?:(?:async\s+)?def\s+\w+\s*\([^)]*\)|class\s+\w+[^:]*):/);
+    if (m) sigs.push(m[0].trim().replace(/:\s*$/, ""));
+    if (sigs.length >= 30) break; // 防爆 token，30 个签名足够
+  }
+  _outlineCache = { uri, version: document.version, text: sigs.join(" | ") };
+  return _outlineCache.text;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 注释转代码 — Copilot 同款 Next Edit Suggestion
 // 光标在注释后 → 模型把注释当指令执行，生成实现代码（走 chat API）
 // ══════════════════════════════════════════════════════════════════════
@@ -287,11 +348,20 @@ function isCommentBlock(document, position) {
 
 const path = require("path");
 
-function buildContextHeader(document) {
+function buildContextHeader(document, position) {
   const filename = document.uri.fsPath
     ? path.basename(document.uri.fsPath)
     : document.uri.toString().split("/").pop();
-  return `# ${filename}\n`;
+  let header = `# ${filename}\n`;
+  // P0: 作用域链——模型知道自己在哪个函数/类里，用对 self/参数名
+  if (position) {
+    const scope = findScopeChain(document, position);
+    if (scope.length > 0) header += `# 作用域: ${scope.join(" > ")}\n`;
+  }
+  // P1: 符号大纲——模型调函数不瞎编名字
+  const outline = getCachedOutline(document);
+  if (outline) header += `# 符号: ${outline}\n`;
+  return header;
 }
 
 function extractImports(document) {
@@ -330,7 +400,7 @@ function buildFIM(document, position) {
   const full = document.getText();
   const offset = document.offsetAt(position);
 
-  const header = buildContextHeader(document);
+  const header = buildContextHeader(document, position);
   const imports = getCachedImports(document);
   const overhead = header.length + imports.length;
 
@@ -426,6 +496,9 @@ function postProcessCompletion(cleaned, document, position) {
         const mostCommon = Object.entries(spaceCounts).sort((a, b) => b[1] - a[1])[0][0];
         indentUnit = " ".repeat(mostCommon);
       }
+      // relDepth 是空格数，换算成缩进单位数：tab 按 1tab≈4空格 折算
+      // 坑：v1.6.3 用了 unitLen 但没声明，多行补全+缩进光标时整个补全被异常吞掉
+      const unitLen = useTabs ? 4 : indentUnit.length;
 
       // Find the first non-empty line in the completion
       const firstNonEmpty = lines.findIndex(l => l.trim().length > 0);
@@ -461,6 +534,41 @@ function postProcessCompletion(cleaned, document, position) {
         }
         cleaned = lines.join("\n");
       }
+    }
+  }
+
+  // P2a. 复读循环截断 — 模型陷入重复时同一非空行连续出现3+次
+  // （Continue processSingleLineCompletion 同款思路）
+  if (cleaned.includes("\n")) {
+    const lines = cleaned.split("\n");
+    for (let i = 2; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (t.length > 3 && t === lines[i - 1].trim() && t === lines[i - 2].trim()) {
+        cleaned = lines.slice(0, i - 1).join("\n").trimEnd();
+        break;
+      }
+    }
+    if (!cleaned.trim()) return "";
+  }
+
+  // P2b. 括号整体配平 — 模型被 maxTokens 截断时括号不收尾
+  // （Continue processSingleLineCompletion 的 bracket balance 思路）
+  // 开括号 > 闭括号 = 表达式没写完：从尾部丢行直到配平；丢光就不显示
+  // （显示半个未闭合表达式会和编辑器自动闭括号打架）
+  if (cleaned.includes("\n")) {
+    const countB = (s, re) => (s.match(re) || []).length;
+    let opens = countB(cleaned, /[([{]/g);
+    let closes = countB(cleaned, /[)\]}]/g);
+    if (opens > closes) {
+      const lines = cleaned.split("\n");
+      while (lines.length > 1 && opens > closes) {
+        lines.pop();
+        const t = lines.join("\n");
+        opens = countB(t, /[([{]/g);
+        closes = countB(t, /[)\]}]/g);
+      }
+      cleaned = opens > closes ? "" : lines.join("\n").trimEnd();
+      if (!cleaned.trim()) return "";
     }
   }
 
@@ -1229,7 +1337,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.6.4 activated, debug logging on");
+  dbg("v1.7.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1403,14 +1511,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.6.4 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.7.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.6.4 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.7.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
