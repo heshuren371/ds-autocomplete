@@ -336,6 +336,65 @@ function cleanCompletion(text, multiLine) {
   return cleaned;
 }
 
+// ── Post-processing: dedup + fix indentation ─────────────────────────
+
+function postProcessCompletion(cleaned, document, position) {
+  if (!cleaned) return cleaned;
+
+  // 1. Dedup — trim prefix that already appears right after cursor
+  const suffix = document.getText(
+    new vscode.Range(position, new vscode.Position(document.lineCount, 0))
+  );
+  if (suffix) {
+    // Google each prefix length from longest to shortest
+    for (let len = Math.min(cleaned.length, suffix.length, 40); len >= 2; len--) {
+      if (suffix.startsWith(cleaned.slice(0, len))) {
+        cleaned = cleaned.slice(len);
+        break;
+      }
+    }
+    if (!cleaned) return "";
+  }
+
+  // 2. Fix indentation — match cursor's line indentation level
+  if (cleaned.includes("\n")) {
+    const cursorLine = document.lineAt(position.line).text;
+    const cursorIndent = cursorLine.match(/^(\s*)/)[1];
+    const charIdx = position.character;
+
+    // If cursor is inside indentation or at column 0 of indented line,
+    // align the completion's first non-empty line
+    if (charIdx <= cursorIndent.length) {
+      const lines = cleaned.split("\n");
+      // Find the typical indent level from surrounding code
+      const docLines = document.getText().split("\n");
+      let baseIndent = "    "; // fallback
+      for (let i = Math.max(0, position.line - 5); i < position.line; i++) {
+        const m = docLines[i].match(/^(\s+)\S/);
+        if (m) { baseIndent = m[1]; break; }
+      }
+      // Rebase multi-line completions to match document indentation
+      const firstNonEmpty = lines.findIndex(l => l.trim().length > 0);
+      if (firstNonEmpty >= 0) {
+        const modelIndent = lines[firstNonEmpty].match(/^(\s*)/)[1];
+        const targetIndent = cursorIndent + baseIndent;
+        for (let i = firstNonEmpty; i < lines.length; i++) {
+          if (lines[i].trim().length === 0) continue;
+          const rel = lines[i].length - lines[i].trimStart().length;
+          const relIndent = lines[i].slice(0, Math.min(rel, lines[i].length - lines[i].trimStart().length));
+          // Relative indent level (model-generated) + base target indent
+          const level = Math.round((relIndent.length - modelIndent.length) / baseIndent.length);
+          const newIndent = targetIndent + baseIndent.repeat(Math.max(0, level + (i > firstNonEmpty ? 0 : -1)));
+          lines[i] = newIndent + lines[i].trimStart();
+        }
+        cleaned = lines.join("\n");
+      }
+    }
+  }
+
+  return cleaned;
+}
+
 // ── API: streaming with early exit + retry ──────────────────────────
 
 let _activeRequest = null;
@@ -933,17 +992,18 @@ class DeepSeekCompletionProvider {
             const result = await requestCommentToCode(document, position, token);
             if (token.isCancellationRequested || !result) { resolve([]); return; }
             const cleaned = cleanCompletion(result, true);
-            if (!cleaned) { resolve([]); return; }
-            startRequest(cleaned, document, position);
-            dbg(`state SET (chat) → ${cleaned.length}c`);
+            const final = postProcessCompletion(cleaned, document, position);
+            if (!final) { resolve([]); return; }
+            startRequest(final, document, position);
+            dbg(`state SET (chat) → ${final.length}c`);
             _lastSuggestion = {
-              text: cleaned, uri: document.uri.toString(),
+              text: final, uri: document.uri.toString(),
               line: position.line, character: position.character,
             };
             rememberSuggestion(_lastSuggestion);
-            setGhostAnchor(document, cleaned, position);
+            setGhostAnchor(document, final, position);
 
-            const item = makeCompletionItem(cleaned);
+            const item = makeCompletionItem(final);
             resolve([item]);
             return;
           } catch (err) {
@@ -958,19 +1018,20 @@ class DeepSeekCompletionProvider {
         const cached = cacheGet(cKey);
         if (cached) {
           const cleaned = cleanCompletion(cached, cfg.get("multiLine"));
-          if (cleaned) {
-            startRequest(cleaned, document, position);
-            const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
-            dbg(`state SET (cache) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
+          const final = postProcessCompletion(cleaned, document, position);
+          if (final) {
+            startRequest(final, document, position);
+            const itext = final.length > 30 ? final.slice(0, 30) + "…" : final;
+            dbg(`state SET (cache) → ${final.length}c @${position.line}:${position.character} [${itext}]`);
             _lastSuggestion = {
-              text: cleaned,
+              text: final,
               uri: document.uri.toString(),
               line: position.line,
               character: position.character,
             };
             rememberSuggestion(_lastSuggestion);
-            setGhostAnchor(document, cleaned, position);
-            resolve([makeCompletionItem(cleaned)]);
+            setGhostAnchor(document, final, position);
+            resolve([makeCompletionItem(final)]);
             return;
           }
         }
@@ -989,25 +1050,26 @@ class DeepSeekCompletionProvider {
           statBump("tokensUsed", Math.ceil(result.length / 4));
 
           const cleaned = cleanCompletion(result, cfg.get("multiLine"));
+          const final = postProcessCompletion(cleaned, document, position);
           updateStatusBarModel();
-          if (!cleaned) {
+          if (!final) {
             resolve([]);
             return;
           }
 
-          startRequest(cleaned, document, position);
-          const itext = cleaned.length > 30 ? cleaned.slice(0, 30) + "…" : cleaned;
-          dbg(`state SET (API) → ${cleaned.length}c @${position.line}:${position.character} [${itext}]`);
+          startRequest(final, document, position);
+          const itext = final.length > 30 ? final.slice(0, 30) + "…" : final;
+          dbg(`state SET (API) → ${final.length}c @${position.line}:${position.character} [${itext}]`);
           _lastSuggestion = {
-            text: cleaned,
+            text: final,
             uri: document.uri.toString(),
             line: position.line,
             character: position.character,
           };
           rememberSuggestion(_lastSuggestion);
-          setGhostAnchor(document, cleaned, position);
+          setGhostAnchor(document, final, position);
 
-          const item = makeCompletionItem(cleaned);
+          const item = makeCompletionItem(final);
           if (cfg.get("replacePartialWord")) {
             const wordRange = document.getWordRangeAtPosition(position);
             if (wordRange) item.range = wordRange;
@@ -1067,7 +1129,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.6.2 activated, debug logging on");
+  dbg("v1.6.3 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1241,14 +1303,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.6.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.6.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.6.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.6.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
