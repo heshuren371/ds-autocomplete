@@ -25,7 +25,7 @@
 ## 安装
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.2.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.3.vsix
 ```
 
 `Cmd+Shift+P` → `Reload Window`。
@@ -103,7 +103,7 @@ even_list = [     ← 灰字自动出现
 ## 更新
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.2.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.3.vsix
 ```
 
 ---
