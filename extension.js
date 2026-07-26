@@ -501,6 +501,76 @@ function cleanCompletion(text, multiLine) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// 改正模式(NES/Zeta 范式) — 模型想【改正】你刚写的代码, 而不是续写
+// ══════════════════════════════════════════════════════════════════════
+// 用户原话: "如果我前面写错了可以给我改正"。
+// 没有本模式时, 改正版补全被当成新代码插入旧错行【下面】, 错行永远还在。
+// 借鉴 Zed Zeta/Cursor NES: 给补全项带 range 覆盖旧行, 接受 = 替换。
+// 安全门: 被改的行必须在 P3 最近编辑缓冲里——改正目标几乎总是刚写的代码,
+// 避免把"长得像的新行"误判成改正(那是真数据丢失)。
+
+// 行相似度: 公共前缀+后缀占比。"total = 0" vs "total = 1" → 8/9 ≈ 0.89
+function lineSimilarity(a, b) {
+  if (!a.length || !b.length) return 0;
+  const minLen = Math.min(a.length, b.length);
+  let prefix = 0;
+  while (prefix < minLen && a[prefix] === b[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < minLen - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+  return (prefix + suffix) / Math.max(a.length, b.length);
+}
+
+// 检测补全的前几行是否构成"对光标前几行的改正"。
+// 返回 { startLine } — 被改正区域的起点行; 不构成改正返回 null。
+function detectCorrectionRange(compLines, document, position) {
+  // 光标行前缀非空 = 正在续写当前行, 不判改正(与 0a 同一前提)
+  const curLineText = (document.lineAt(position.line) || {}).text || "";
+  if (curLineText.slice(0, position.character).trim() !== "") return null;
+
+  // 最近编辑过的行集合(Zeta 范式: 改正目标几乎总是刚写/刚改的代码)
+  const now = Date.now();
+  const uri = document.uri.toString();
+  const recentLines = new Set();
+  for (const e of _recentEdits) {
+    if (e.uri === uri && now - e.ts < RECENT_EDITS_TTL_MS) recentLines.add(e.line);
+  }
+  if (recentLines.size === 0) return null;
+
+  // 从长到短试 k 行: 每行要么与 doc 精确相同, 要么"相似但不同"且是最近编辑行
+  const maxK = Math.min(compLines.length - 1, 3, position.line);
+  for (let k = maxK; k >= 1; k--) {
+    const startLine = position.line - k;
+    let similarCount = 0;
+    let valid = true;
+    for (let i = 0; i < k; i++) {
+      const docLine = ((document.lineAt(startLine + i) || {}).text || "").trim();
+      const compLine = compLines[i].trim();
+      if (compLine === docLine) continue;                    // 精确重复, 不算改正
+      if (!recentLines.has(startLine + i)) { valid = false; break; }
+      if (lineSimilarity(compLine, docLine) < 0.6) { valid = false; break; }
+      similarCount++;
+    }
+    // 至少一行"相似但不同"(全精确重复是 0a 的活, 轮不到我们)
+    if (valid && similarCount >= 1) {
+      return { startLine };
+    }
+  }
+  return null;
+}
+
+// 构造补全项: 构成改正 → range 覆盖旧行(接受=替换); 否则普通插入。
+// 三个产出补全项的路径(chat/cache/FIM)统一走这里。
+function makeCorrectionAwareItem(final, document, position) {
+  const corr = detectCorrectionRange(final.split("\n"), document, position);
+  if (corr) {
+    dbg(`correction mode: replacing from line ${corr.startLine}`);
+    return makeCompletionItem(final, new vscode.Range(
+      new vscode.Position(corr.startLine, 0), position));
+  }
+  return makeCompletionItem(final);
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 后处理 — 去重(模型把下文重抄) + 缩进对齐(模型不知道你在几层)
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1315,7 +1385,6 @@ class DeepSeekCompletionProvider {
             if (token.isCancellationRequested || !result) { resolve([]); return; }
             const cleaned = cleanCompletion(result, true);
             const final = postProcessCompletion(cleaned, document, position);
-            if (!final) { resolve([]); return; }
             startRequest(final, document, position);
             dbg(`state SET (chat) → ${final.length}c`);
             _lastSuggestion = {
@@ -1325,7 +1394,7 @@ class DeepSeekCompletionProvider {
             rememberSuggestion(_lastSuggestion);
             setGhostAnchor(document, final, position);
 
-            const item = makeCompletionItem(final);
+            const item = makeCorrectionAwareItem(final, document, position);
             resolve([item]);
             return;
           } catch (err) {
@@ -1343,7 +1412,7 @@ class DeepSeekCompletionProvider {
           const final = postProcessCompletion(cleaned, document, position);
           if (final) {
             startRequest(final, document, position);
-            const itext = final.length > 30 ? final.slice(0, 30) + "…" : final;
+          const itext = final.length > 30 ? final.slice(0, 30) + "…" : final;
             dbg(`state SET (cache) → ${final.length}c @${position.line}:${position.character} [${itext}]`);
             _lastSuggestion = {
               text: final,
@@ -1353,7 +1422,7 @@ class DeepSeekCompletionProvider {
             };
             rememberSuggestion(_lastSuggestion);
             setGhostAnchor(document, final, position);
-            resolve([makeCompletionItem(final)]);
+            resolve([makeCorrectionAwareItem(final, document, position)]);
             return;
           }
         }
@@ -1391,7 +1460,7 @@ class DeepSeekCompletionProvider {
           rememberSuggestion(_lastSuggestion);
           setGhostAnchor(document, final, position);
 
-          const item = makeCompletionItem(final);
+          const item = makeCorrectionAwareItem(final, document, position);
           if (cfg.get("replacePartialWord")) {
             const wordRange = document.getWordRangeAtPosition(position);
             if (wordRange) item.range = wordRange;

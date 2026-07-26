@@ -101,7 +101,7 @@ const mockVscode = {
   Range,
   InlineCompletionTriggerKind: { Automatic: 0, Explicit: 1 },
   InlineCompletionItem: class {
-    constructor(text) { this.insertText = text; }
+    constructor(text, range, command) { this.insertText = text; this.range = range; this.command = command; }
   },
   StatusBarAlignment: { Right: 2 },
   workspace: {
@@ -587,7 +587,30 @@ async function run() {
     `T19: 接受后必须自动触发下一段补全, got cursorTriggerCount=${cursorTriggerCount}`);
   console.log("✓ T19 连锁补全(Tab接受后自动触发下一段)");
 
-  console.log("\nALL 19 TESTS PASSED");
+  // ── T20: 改正模式 — 模型改正最近编辑的行 → range 覆盖旧行(NES/Zeta) ──
+  // 用户原话: "如果我前面写错了可以给我改正"。旧行为: 改正版插到错行下面, 错行还在。
+  // 安全门: 被改行必须在 P3 最近编辑缓冲, 防止"长得像的新行"被误判成改正。
+  settings.commentToCode = false;
+  sseResponseText = "total = 1\nprint(total)";
+  const docT20 = new FakeDocument("total = 0\n");
+  // 用户刚写了 "total = 0" → 进最近编辑缓冲
+  for (const fn of docListeners) {
+    fn({ document: docT20, contentChanges: [{ text: "total = 0", range: { start: new Position(0, 0), end: new Position(0, 9) } }] });
+  }
+  const items20 = await capturedProvider.provideInlineCompletionItems(docT20, new Position(1, 0), auto, cancelToken());
+  const item20 = items20[0];
+  assert(item20 && item20.range, "T20: 改正模式必须带 range 覆盖旧行");
+  assert.strictEqual(item20.range.start.line, 0, `T20: range 必须从旧行起, got line=${item20.range.start.line}`);
+  assert.strictEqual(String(item20.insertText), "total = 1\nprint(total)",
+    `T20: 改正内容原样保留, got ${JSON.stringify(item20.insertText)}`);
+
+  // 对照: 同样的模型输出, 但该行不在最近编辑缓冲 → 普通插入(无 range)
+  const docT20b = new FakeDocument("total = 0\n"); // 无编辑事件
+  const items20b = await capturedProvider.provideInlineCompletionItems(docT20b, new Position(1, 0), auto, cancelToken());
+  assert(items20b[0] && !items20b[0].range, "T20: 非最近编辑行不得触发改正模式(防误删)");
+  console.log("✓ T20 改正模式(最近编辑行触发range替换/非最近编辑普通插入)");
+
+  console.log("\nALL 20 TESTS PASSED");
   process.exit(0);
 }
 
