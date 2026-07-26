@@ -610,7 +610,31 @@ async function run() {
   assert(items20b[0] && !items20b[0].range, "T20: 非最近编辑行不得触发改正模式(防误删)");
   console.log("✓ T20 改正模式(最近编辑行触发range替换/非最近编辑普通插入)");
 
-  console.log("\nALL 20 TESTS PASSED");
+  // ── T21: 注释前缀对齐 — 模型改正/重复前输出解释注释, 对齐不得被打飞 ──
+  // 用户实测: "内联会给我一行注释解释为什么写错了"——注释 vs 代码相似度≈0,
+  // 旧对齐直接失效, 改正退化成追加。修复: 前导注释跳过对齐但保留在文本里。
+  settings.commentToCode = false;
+  // 场景1: 注释+改正 → 注释保留, range 覆盖错行
+  sseResponseText = "# 应该是 1 不是 0\ntotal = 1\nprint(total)";
+  const docT21 = new FakeDocument("total = 0\n");
+  for (const fn of docListeners) {
+    fn({ document: docT21, contentChanges: [{ text: "total = 0", range: { start: new Position(0, 0), end: new Position(0, 9) } }] });
+  }
+  const items21 = await capturedProvider.provideInlineCompletionItems(docT21, new Position(1, 0), auto, cancelToken());
+  assert(items21[0] && items21[0].range && items21[0].range.start.line === 0,
+    `T21: 注释前缀的改正也必须触发range替换, got range=${JSON.stringify(items21[0]?.range)}`);
+  assert(String(items21[0].insertText).startsWith("# 应该是 1"),
+    `T21: 解释注释必须保留, got ${JSON.stringify(items21[0].insertText)}`);
+
+  // 场景2: 注释+整行重复 → 注释保留, 重复行裁掉
+  sseResponseText = "# 下面打印结果\ntotal = 0\nprint(total)";
+  const docT21b = new FakeDocument("total = 0\n");
+  const items21b = await capturedProvider.provideInlineCompletionItems(docT21b, new Position(1, 0), auto, cancelToken());
+  assert.strictEqual(String(items21b[0].insertText), "# 下面打印结果\nprint(total)",
+    `T21: 注释前缀的重复必须裁且注释保留, got ${JSON.stringify(items21b[0].insertText)}`);
+  console.log("✓ T21 注释前缀对齐(改正触发range/重复裁剪,注释都保留)");
+
+  console.log("\nALL 21 TESTS PASSED");
   process.exit(0);
 }
 

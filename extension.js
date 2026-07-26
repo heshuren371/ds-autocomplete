@@ -520,6 +520,20 @@ function lineSimilarity(a, b) {
   return (prefix + suffix) / Math.max(a.length, b.length);
 }
 
+// 模型改正/重复前常先输出解释性注释("# 这里应该是…" / "// fix: …")。
+// 注释行不参与和 doc 代码行的对齐(注释 vs 代码相似度≈0, 会把对齐打飞),
+// 但注释本身保留在最终文本里——用户能看到模型的解释。
+// 返回首个非注释行的下标。
+function firstCodeLineIndex(compLines) {
+  let i = 0;
+  while (i < compLines.length - 1) {
+    const t = compLines[i].trim();
+    if (t.startsWith("#") || t.startsWith("//")) { i++; continue; }
+    break;
+  }
+  return i;
+}
+
 // 检测补全的前几行是否构成"对光标前几行的改正"。
 // 返回 { startLine } — 被改正区域的起点行; 不构成改正返回 null。
 function detectCorrectionRange(compLines, document, position) {
@@ -537,14 +551,17 @@ function detectCorrectionRange(compLines, document, position) {
   if (recentLines.size === 0) return null;
 
   // 从长到短试 k 行: 每行要么与 doc 精确相同, 要么"相似但不同"且是最近编辑行
-  const maxK = Math.min(compLines.length - 1, 3, position.line);
+  // 前导注释行跳过对齐(注释保留在最终文本里)
+  const codeStart = firstCodeLineIndex(compLines);
+  const codeLines = compLines.slice(codeStart);
+  const maxK = Math.min(codeLines.length - 1, 3, position.line);
   for (let k = maxK; k >= 1; k--) {
     const startLine = position.line - k;
     let similarCount = 0;
     let valid = true;
     for (let i = 0; i < k; i++) {
       const docLine = ((document.lineAt(startLine + i) || {}).text || "").trim();
-      const compLine = compLines[i].trim();
+      const compLine = codeLines[i].trim();
       if (compLine === docLine) continue;                    // 精确重复, 不算改正
       if (!recentLines.has(startLine + i)) { valid = false; break; }
       if (lineSimilarity(compLine, docLine) < 0.6) { valid = false; break; }
@@ -583,24 +600,28 @@ function postProcessCompletion(cleaned, document, position) {
   {
     // 0a. 整行重复: 补全的前 k 行 == 光标前 k 行 → 丢这 k 行
     //     仅在光标行前缀为空时启用——否则补全首行是当前行的延续, 不是重复
+    //     前导注释行跳过对齐但保留在结果里(模型的解释是有价值的)
     const curPrefix = ((document.lineAt(position.line) || {}).text || "")
       .slice(0, position.character).trim();
     if (curPrefix === "" && cleaned.includes("\n")) {
       const compLines = cleaned.split("\n");
+      const codeStart = firstCodeLineIndex(compLines);
+      const codeLines = compLines.slice(codeStart);
       let drop = 0;
-      const maxK = Math.min(compLines.length - 1, 10);
+      const maxK = Math.min(codeLines.length - 1, 10);
       for (let k = maxK; k >= 1; k--) {
         const startLine = position.line - k;
         if (startLine < 0) continue;
         let ok = true;
         for (let i = 0; i < k; i++) {
           const docLine = (document.lineAt(startLine + i) || {}).text || "";
-          if (compLines[i].trim() !== docLine.trim()) { ok = false; break; }
+          if (codeLines[i].trim() !== docLine.trim()) { ok = false; break; }
         }
         if (ok) { drop = k; break; }
       }
       if (drop > 0) {
-        cleaned = compLines.slice(drop).join("\n");
+        // 前导注释 + 丢行后的剩余代码
+        cleaned = compLines.slice(0, codeStart).concat(codeLines.slice(drop)).join("\n");
         if (!cleaned.trim()) return "";
       }
     }
