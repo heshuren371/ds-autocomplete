@@ -540,7 +540,45 @@ async function run() {
   settings.replacePartialWord = true; // 恢复 mock 默认
   console.log("✓ T17 前缀去重(整行重复裁/改正保留/行内重叠裁)");
 
-  console.log("\nALL 17 TESTS PASSED");
+  // ── T18: Cmd+Right 竞态 — edit 期间光标事件不得清掉 remainder ──
+  // 真实 VSCode 在 editor.edit() 期间【同步】派发 onDidChangeTextEditorSelection。
+  // 光标落在幽灵文中间 → 旧代码走"拒绝"分支清空 _lastSuggestion
+  // → v1.6.2 的 null guard 提前 return → remainder 丢失 → 下次补全是全新 API 结果
+  // (用户报告: "cmd+right 有时候补全的不是幽灵文")。修复后旗子放行, remainder 必在。
+  sseResponseText = "total = compute(x)";
+  requestCount = 0;
+  const docT18 = new FakeDocument("y = ");
+  let items18 = await capturedProvider.provideInlineCompletionItems(docT18, new Position(0, 4), auto, cancelToken());
+  assert(String(items18[0].insertText).includes("total"), "T18 setup: 幽灵文已展示");
+
+  // 模拟真实 VSCode: edit 期间同步派发光标事件(光标停幽灵文中间=拒绝分支触发条件)
+  mockVscode.window.activeTextEditor = {
+    selection: { active: new Position(0, 4) },
+    edit: async (fn) => {
+      fn({ insert: (pos, text) => {
+        insertedTexts.push(text);
+        const newPos = new Position(0, 4 + text.length);
+        mockVscode.window.activeTextEditor.selection = { active: newPos, isEmpty: true };
+        for (const fnSel of selectionListeners) {
+          fnSel({ textEditor: { document: docT18, selection: { active: newPos } } });
+        }
+      }});
+      return true;
+    },
+  };
+  insertedTexts = [];
+  await commandHandlers["dsAutocomplete.acceptWord"]();
+  assert.deepStrictEqual(insertedTexts, ["total "], `T18: 插入第一个词, got ${JSON.stringify(insertedTexts)}`);
+
+  // remainder 必须作为幽灵文续上, 且不得发新 API 请求
+  const reqBefore18 = requestCount;
+  items18 = await capturedProvider.provideInlineCompletionItems(docT18, new Position(0, 10), auto, cancelToken());
+  assert.strictEqual(String(items18[0].insertText), "= compute(x)",
+    `T18: Cmd+Right 后必须续上原幽灵文 remainder, got ${JSON.stringify(items18[0]?.insertText)}`);
+  assert.strictEqual(requestCount, reqBefore18, "T18: remainder 必须即时给出, 不得发新 API 请求");
+  console.log("✓ T18 Cmd+Right 竞态(edit期间光标事件不得清掉remainder)");
+
+  console.log("\nALL 18 TESTS PASSED");
   process.exit(0);
 }
 

@@ -1016,6 +1016,12 @@ function endRequest(status) {
 
 let _lastSuggestion = null; // { text, uri, line, character }
 let _pendingRemainder = null; // remainder after partial accept
+// 部分接受(Cmd+Right/Cmd+Down)的 edit 进行中标志。
+// 真实 VSCode 会在 edit() 期间【同步】派发文档变更和光标移动事件,
+// 监听器若把这些当成"用户行为"就会误判(幽灵文被拒→状态清空→remainder 丢失),
+// 最终用户看到的是一次全新 API 补全——即"补全的不是幽灵文"bug。
+// 所有监听器入口必须检查此标志并直接放行。
+let _partialAcceptInFlight = false;
 
 // ══════════════════════════════════════════════════════════════════════
 // 幽灵文接受追踪 — 光标移到幽灵文末尾+文本匹配=接受，移开=拒绝
@@ -1417,6 +1423,8 @@ function watchAcceptance(context) {
   );
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
+      // 部分接受的 edit 由我们自己发起, 不是用户打字——放行, 不做分歧判断
+      if (_partialAcceptInFlight) return;
       const cur = _lastSuggestion ? `${_lastSuggestion.text.length}c@${_lastSuggestion.line}:${_lastSuggestion.character}` : "null";
       const chg = e.contentChanges.length ? e.contentChanges.map(c => c.text.length + "c").join(",") : "zero";
       dbg(`watchAcceptance ENTRY state=${cur} changes=[${chg}]`);
@@ -1501,6 +1509,10 @@ function activate(context) {
   // VSCode 不重新触发 → 手动检测并触发
   context.subscriptions.push(
     vscode.window.onDidChangeTextEditorSelection((e) => {
+      // 部分接受的 edit 会移动光标——这是我们造成的, 不是用户把光标移开,
+      // 绝不能走下面的"拒绝幽灵文"分支(该分支会清空 _lastSuggestion,
+      // 导致 acceptWord 丢失 remainder, 这正是 Cmd+Right 补全内容错乱的根因)
+      if (_partialAcceptInFlight) return;
       // ── Ghost text acceptance detection (Continue/Copilot pattern) ──
       // 光标移动 → 检查是否在幽灵文末尾
       // 末尾+文本匹配 → 接受
@@ -1564,24 +1576,40 @@ function activate(context) {
         await vscode.commands.executeCommand("editor.action.inlineSuggest.commit");
         return;
       }
+
+      // ── 第一步: 快照共享状态到局部变量 ──
+      // edit() 期间 VSCode 会同步派发文档/光标事件, 监听器可能改动 _lastSuggestion。
+      // 局部快照不受任何监听器影响, 是部分接受逻辑的唯一事实来源。
+      // (v1.6.2 曾用 `if (!_lastSuggestion) return;` 防空指针, 但那会把 remainder
+      //  一起丢掉——崩溃修了, bug 变成了"补全的不是幽灵文"。快照是根治。)
       const full = _lastSuggestion.text;
+      const uri = _lastSuggestion.uri;
+
+      // ── 第二步: 计算"本次插入"与"剩余部分" ──
       const m = full.match(RE_WHITESPACE_WORD);
       const word = m ? m[0] : full;
       const after = full.slice(word.length);
       const trailingSpace = after.startsWith(" ") ? " " : "";
-
-      await editor.edit((eb) => eb.insert(editor.selection.active, word + trailingSpace));
-
-      // _lastSuggestion 可能在 edit 期间被异步清掉
-
-      if (!_lastSuggestion) return;
-
       const remainder = after.slice(trailingSpace.length);
+
+      // ── 第三步: 举旗 → 插入 → 收旗 ──
+      // 旗子竖起期间, 所有监听器对本次 edit 引起的事件直接放行。
+      _partialAcceptInFlight = true;
+      try {
+        await editor.edit((eb) => eb.insert(editor.selection.active, word + trailingSpace));
+      } finally {
+        _partialAcceptInFlight = false;
+      }
+
+      // ── 第四步: 用快照写回新状态(edit 后光标已在插入内容末尾) ──
       if (remainder) {
-        _lastSuggestion.text = remainder;
-        _lastSuggestion.line = editor.selection.active.line;
-        _lastSuggestion.character = editor.selection.active.character;
-        _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
+        _lastSuggestion = {
+          text: remainder,
+          uri,
+          line: editor.selection.active.line,
+          character: editor.selection.active.character,
+        };
+        _pendingRemainder = { text: remainder, uri };
       } else {
         endRequest("accepted");
         dbg("state CLEAR ≡ partial-accept consumed all");
@@ -1598,22 +1626,31 @@ function activate(context) {
         await vscode.commands.executeCommand("editor.action.inlineSuggest.commit");
         return;
       }
+
+      // 快照 + 计算(与 acceptWord 同构, 见上方注释)
       const full = _lastSuggestion.text;
+      const uri = _lastSuggestion.uri;
       const nl = full.indexOf("\n");
       // First line INCLUDING its line break — cursor lands on the next line,
       // where the remainder renders as fresh ghost text.
       const unit = nl === -1 ? full : full.slice(0, nl + 1);
       const remainder = nl === -1 ? "" : full.slice(nl + 1);
 
-      await editor.edit((eb) => eb.insert(editor.selection.active, unit));
-
-      if (!_lastSuggestion) return;
+      _partialAcceptInFlight = true;
+      try {
+        await editor.edit((eb) => eb.insert(editor.selection.active, unit));
+      } finally {
+        _partialAcceptInFlight = false;
+      }
 
       if (remainder) {
-        _lastSuggestion.text = remainder;
-        _lastSuggestion.line = editor.selection.active.line;
-        _lastSuggestion.character = editor.selection.active.character;
-        _pendingRemainder = { text: remainder, uri: _lastSuggestion.uri };
+        _lastSuggestion = {
+          text: remainder,
+          uri,
+          line: editor.selection.active.line,
+          character: editor.selection.active.character,
+        };
+        _pendingRemainder = { text: remainder, uri };
       } else {
         endRequest("accepted");
         dbg("state CLEAR ≡ partial-accept consumed all");

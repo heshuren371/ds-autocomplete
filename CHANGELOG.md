@@ -4,6 +4,7 @@
 
 - 🐛 前缀去重: 模型把光标前已写好的代码又输出一遍时裁掉——整行重复丢行(trim后精确匹配才裁), 行内重叠按字符裁(replacePartialWord=true 时跳过)
 - 📝 边界保证: 模型想改正用户代码时输出不同, 不匹配不裁, 原样保留
+- 🐛 修 Cmd+Right 间歇补全错乱: editor.edit() 期间 VSCode 同步派发光标事件, 被拒判分支清空状态导致 remainder 丢失 → 全新 API 补全顶替。引入 _partialAcceptInFlight 旗子 + 快照模式根治(v1.6.2 的 null guard 只治了崩溃没治病根)
 
 ## 1.9.2 (2026-07-26)
 
