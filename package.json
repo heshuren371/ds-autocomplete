@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.9.4",
+  "version": "1.9.5",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -200,6 +200,12 @@
           "type": "boolean",
           "default": true,
           "description": "连锁补全(Cursor/Zed 同款): 接受一段补全后立刻触发下一段, tab-tab-tab 连续心流。关闭则接受后需自己打字触发"
+        },
+        "dsAutocomplete.wholeFileMaxChars": {
+          "type": "number",
+          "default": 24000,
+          "minimum": 0,
+          "description": "全文件模式阈值(字符): 文件小于此值时整篇喂给模型不截断。DeepSeek V4 上下文 1M + prompt 缓存命中价 2%, 小文件全量上下文接近免费。0=关闭。单行模式不参与(保持 800/200 快优先)"
         }
       }
     },

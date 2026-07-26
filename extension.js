@@ -467,14 +467,24 @@ function buildFIM(document, position) {
 
   // Single-line: only need current-line context (token efficiency)
   const multiLine = cfg.get("multiLine");
-  const maxPrefix = multiLine
+  let maxPrefix = multiLine
     ? cfg.get("maxPrefixChars")
     : Math.min(cfg.get("maxPrefixChars"), 800);
-  const maxSuffix = multiLine
+  let maxSuffix = multiLine
     ? cfg.get("maxSuffixChars")
     : Math.min(cfg.get("maxSuffixChars"), 200);
 
-  const prefixStart = findPrefixBoundary(full, offset, maxPrefix - overhead);
+  // 全文件模式(2026-07 官方文档: DeepSeek V4 上下文 1M, 缓存命中价 2%):
+  // 小文件整篇喂给模型, 不截断——imports/函数定义/下文全保住, 这是"全局补全"的地基。
+  // 单行模式保持 800/200 小窗口(快优先), 不参与; 大文件仍按 maxPrefixChars 截断。
+  const wholeMax = cfg.get("wholeFileMaxChars") || 0;
+  const wholeFile = multiLine && wholeMax > 0 && full.length <= wholeMax;
+  if (wholeFile) {
+    maxPrefix = overhead + offset;        // header + 光标前全量
+    maxSuffix = full.length - offset;     // 光标后全量
+  }
+
+  const prefixStart = wholeFile ? 0 : findPrefixBoundary(full, offset, maxPrefix - overhead);
   const rawPrefix = full.slice(prefixStart, offset);
   const prefix = (header + imports + rawPrefix).slice(-maxPrefix);
   const suffix = full.slice(offset, offset + maxSuffix);
@@ -1553,7 +1563,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.9.4 activated, debug logging on");
+  dbg("v1.9.5 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1769,14 +1779,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.9.4 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.9.5 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.9.4 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.9.5 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {

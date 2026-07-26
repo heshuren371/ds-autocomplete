@@ -634,7 +634,29 @@ async function run() {
     `T21: 注释前缀的重复必须裁且注释保留, got ${JSON.stringify(items21b[0].insertText)}`);
   console.log("✓ T21 注释前缀对齐(改正触发range/重复裁剪,注释都保留)");
 
-  console.log("\nALL 21 TESTS PASSED");
+  // ── T22: 全文件模式 — 小文件不截断(DeepSeek V4 1M 上下文 + 缓存 2% 价) ──
+  settings.commentToCode = false;
+  sseResponseText = "pass";
+  const docT22 = new FakeDocument("x = 1\n".repeat(60) + "y = ");
+  settings.maxPrefixChars = 100;
+  settings.maxSuffixChars = 50;
+  // 关 → 截断
+  settings.wholeFileMaxChars = 0;
+  await capturedProvider.provideInlineCompletionItems(docT22, new Position(60, 4), auto, cancelToken());
+  assert(lastRequestBody.prompt.length <= 100,
+    `T22: 截断模式 prefix 必须 ≤100, got ${lastRequestBody.prompt.length}`);
+  // 开 → 全文件(370+ 字符全进 prompt)。换文档避开 instant-remainder 短路
+  settings.wholeFileMaxChars = 24000;
+  const docT22b = new FakeDocument("x = 1\n".repeat(60) + "y = ");
+  await capturedProvider.provideInlineCompletionItems(docT22b, new Position(60, 4), auto, cancelToken());
+  assert(lastRequestBody.prompt.length > 300,
+    `T22: 全文件模式 prefix 必须全量(>300), got ${lastRequestBody.prompt.length}`);
+  delete settings.maxPrefixChars;
+  delete settings.maxSuffixChars;
+  delete settings.wholeFileMaxChars;
+  console.log("✓ T22 全文件模式(关=截断≤100, 开=全量>300)");
+
+  console.log("\nALL 22 TESTS PASSED");
   process.exit(0);
 }
 

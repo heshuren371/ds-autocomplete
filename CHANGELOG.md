@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.5 (2026-07-26)
+
+- ✨ 全文件模式 `wholeFileMaxChars`(默认 24000): 小文件整篇喂给模型不截断——DeepSeek V4 官方文档实测上下文 1M + prompt 缓存命中价仅 2%, 全量上下文接近免费。单行模式保持 800/200 快优先不参与
+
 ## 1.9.4 (2026-07-26)
 
 - ✨ 连锁补全 `chainedTab`(Cursor Tab/Zed edit-prediction 同款): Tab 接受一段后 50ms 自动触发下一段, tab-tab-tab 连续心流。防抖+缓存兜底不打爆 API,可在设置关闭

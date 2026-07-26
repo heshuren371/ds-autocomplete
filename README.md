@@ -30,7 +30,7 @@
 ## 安装
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.4.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.5.vsix
 ```
 
 `Cmd+Shift+P` → `Reload Window`。
@@ -148,6 +148,7 @@ comment-to-code 的输出预算（`max_tokens`）：
 | `skipInString` | `false` | 字符串内跳过（**别开**——会杀掉 `print("hello` 这类最需要的补全） |
 | `maxPrefixChars` | `8000` | 上文字符上限(≈200行,prompt缓存重复部分仅10%费用) |
 | `maxSuffixChars` | `4000` | 下文字符上限(≈100行,防模型重抄下文) |
+| `wholeFileMaxChars` | `24000` | 全文件模式阈值：小文件整篇喂模型不截断(V4 上下文 1M+缓存命中 2% 价),0=关 |
 | `stopTokens` | `[]` | 额外停止序列 |
 | `enabledLanguages` | `["*"]` | 启用补全的语言 |
 | `disabledLanguages` | `[]` | 在此语言里关闭（优先级高于 enabled） |
@@ -158,7 +159,7 @@ comment-to-code 的输出预算（`max_tokens`）：
 ## 更新
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.4.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.5.vsix
 ```
 
 ---
