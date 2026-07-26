@@ -513,7 +513,34 @@ async function run() {
   delete settings.chatThinking;
   console.log("✓ T16 思考强度两档(med=disabled+8000, max=enabled+16000, 覆盖=40000)");
 
-  console.log("\nALL 16 TESTS PASSED");
+  // ── T17: 前缀去重 — 重复已写代码必须裁, 改正用户代码必须留 ──
+  // 用户原话: "前面写2行代码了,内联又写了一遍; 写错了可以改,但写对了别重复"
+  settings.commentToCode = false; // 走 FIM 路径
+  // 场景1: 2行正确代码被原样重复 → 只剩新行
+  sseResponseText = "total = 0\ntotal += 1\nprint(total)";
+  const docT17 = new FakeDocument("total = 0\ntotal += 1\n");
+  let items17 = await capturedProvider.provideInlineCompletionItems(docT17, new Position(2, 0), auto, cancelToken());
+  assert.strictEqual(String(items17[0].insertText), "print(total)",
+    `T17: 整行重复必须裁掉, got ${JSON.stringify(items17[0]?.insertText)}`);
+
+  // 场景2: 模型输出不同代码(改正) → 不能裁
+  sseResponseText = "total = 1\nprint(total)";
+  const docT17b = new FakeDocument("total = 0\n");
+  items17 = await capturedProvider.provideInlineCompletionItems(docT17b, new Position(1, 0), auto, cancelToken());
+  assert(String(items17[0].insertText).includes("total = 1"),
+    `T17: 模型改正用户代码必须保留, got ${JSON.stringify(items17[0]?.insertText)}`);
+
+  // 场景3: 行内重叠(光标在 "pri" 后, 模型重复完整词) → 裁重叠
+  settings.replacePartialWord = false;
+  sseResponseText = "print(total)";
+  const docT17c = new FakeDocument("pri");
+  items17 = await capturedProvider.provideInlineCompletionItems(docT17c, new Position(0, 3), auto, cancelToken());
+  assert.strictEqual(String(items17[0].insertText), "nt(total)",
+    `T17: 行内前缀重叠必须裁掉, got ${JSON.stringify(items17[0]?.insertText)}`);
+  settings.replacePartialWord = true; // 恢复 mock 默认
+  console.log("✓ T17 前缀去重(整行重复裁/改正保留/行内重叠裁)");
+
+  console.log("\nALL 17 TESTS PASSED");
   process.exit(0);
 }
 

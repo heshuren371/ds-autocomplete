@@ -507,6 +507,48 @@ function cleanCompletion(text, multiLine) {
 function postProcessCompletion(cleaned, document, position) {
   if (!cleaned) return cleaned;
 
+  // 0. 前缀去重 — 模型把光标前已写好的代码又输出一遍时裁掉
+  //    用户痛点: 前面写了2行正确代码, 补全又原样重复一遍
+  //    边界: 只裁"精确重复"(trim后相同); 模型想改正用户代码时输出不同, 不会误裁
+  {
+    // 0a. 整行重复: 补全的前 k 行 == 光标前 k 行 → 丢这 k 行
+    //     仅在光标行前缀为空时启用——否则补全首行是当前行的延续, 不是重复
+    const curPrefix = ((document.lineAt(position.line) || {}).text || "")
+      .slice(0, position.character).trim();
+    if (curPrefix === "" && cleaned.includes("\n")) {
+      const compLines = cleaned.split("\n");
+      let drop = 0;
+      const maxK = Math.min(compLines.length - 1, 10);
+      for (let k = maxK; k >= 1; k--) {
+        const startLine = position.line - k;
+        if (startLine < 0) continue;
+        let ok = true;
+        for (let i = 0; i < k; i++) {
+          const docLine = (document.lineAt(startLine + i) || {}).text || "";
+          if (compLines[i].trim() !== docLine.trim()) { ok = false; break; }
+        }
+        if (ok) { drop = k; break; }
+      }
+      if (drop > 0) {
+        cleaned = compLines.slice(drop).join("\n");
+        if (!cleaned.trim()) return "";
+      }
+    }
+    // 0b. 行内重叠: 补全开头与光标前文本尾部重叠(如光标在 "pri" 后, 模型输出 "print(x)")
+    //     replacePartialWord=true 时跳过——range 替换机制需要完整词
+    if (!config().get("replacePartialWord")) {
+      const before = document.getText(new vscode.Range(new vscode.Position(0, 0), position));
+      const maxLen = Math.min(cleaned.length, before.length, 120);
+      for (let len = maxLen; len >= 3; len--) {
+        if (before.endsWith(cleaned.slice(0, len))) {
+          cleaned = cleaned.slice(len);
+          break;
+        }
+      }
+      if (!cleaned.trim()) return "";
+    }
+  }
+
   // 1. Dedup — trim prefix that already appears right after cursor
   const endPos = document.positionAt(document.getText().length);
   const suffix = document.getText(
@@ -1413,7 +1455,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.9.2 activated, debug logging on");
+  dbg("v1.9.3 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1587,14 +1629,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.9.2 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.9.3 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.9.2 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.9.3 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
