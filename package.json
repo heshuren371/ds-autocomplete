@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -108,7 +108,11 @@
         "dsAutocomplete.multiLineMode": {
           "type": "string",
           "default": "always",
-          "enum": ["always", "auto", "never"],
+          "enum": [
+            "always",
+            "auto",
+            "never"
+          ],
           "description": "Multi-line completion strategy"
         },
         "dsAutocomplete.replacePartialWord": {
@@ -128,7 +132,9 @@
         },
         "dsAutocomplete.disabledLanguages": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "List of language IDs to explicitly disable inline completions for (complements enabledLanguages)",
           "scope": "language-overridable"
@@ -155,7 +161,9 @@
         "dsAutocomplete.stopTokens": {
           "type": "array",
           "default": [],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Additional stop sequences for the model"
         },
         "dsAutocomplete.enabledLanguages": {
@@ -163,8 +171,23 @@
           "default": [
             "*"
           ],
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Languages where autocomplete is active. [\"*\"] = all file types; or list specific ones like [\"python\", \"javascript\"]"
+        },
+        "dsAutocomplete.chatThinking": {
+          "type": "string",
+          "enum": [
+            "med",
+            "max"
+          ],
+          "enumDescriptions": [
+            "关闭思考 — comment-to-code 秒出, 不为看不见的推理烧 token (实测省 95% token)",
+            "开启思考 — 复杂注释生成质量更高, 但慢几秒且 reasoning 消耗 max_tokens"
+          ],
+          "default": "med",
+          "description": "思考强度(仅作用于 comment-to-code chat 路径; FIM 补全端点实测免疫 thinking 参数)"
         }
       }
     },

@@ -482,7 +482,30 @@ async function run() {
   assert(!sec15b.includes("ccc"), `T15: 光标处编辑必须排除(已在prefix), got: ${sec15b}`);
   console.log("✓ T15 最近编辑注入(跨文件+远处保留+光标处排除)");
 
-  console.log("\nALL 15 TESTS PASSED");
+  // ── T16: 思考强度两档 — med 默认关思考, max 开思考+提 max_tokens ──
+  // 实测官方 API(2026-07): 不传 thinking = 默认开思考, reasoning 计入 max_tokens
+  // med 必须显式 disabled, 否则 comment-to-code 为看不见的推理烧钱+白等
+  sseResponseText = "x = 1";
+  requestCount = 0;
+  settings.commentToCode = true; // mock 默认缺此项, 不开永远走 FIM
+  settings.chatThinking = undefined; // 默认 med
+  const docT16 = new FakeDocument("x = 1\n# 计算翻倍\n");
+  await capturedProvider.provideInlineCompletionItems(docT16, new Position(2, 0), auto, cancelToken());
+  assert(lastRequestBody && lastRequestBody.thinking && lastRequestBody.thinking.type === "disabled",
+    `T16: med 档必须显式关思考, got thinking=${JSON.stringify(lastRequestBody?.thinking)}`);
+  assert.strictEqual(lastRequestBody.max_tokens, 800, "T16: med 档 max_tokens 保持 800");
+
+  settings.chatThinking = "max";
+  const docT16b = new FakeDocument("x = 1\n# 计算平方\n");
+  await capturedProvider.provideInlineCompletionItems(docT16b, new Position(2, 0), auto, cancelToken());
+  assert(lastRequestBody.thinking.type === "enabled",
+    `T16: max 档必须开思考, got ${JSON.stringify(lastRequestBody.thinking)}`);
+  assert.strictEqual(lastRequestBody.max_tokens, 2000,
+    `T16: max 档 max_tokens 必须提到 2000 补偿 reasoning, got ${lastRequestBody.max_tokens}`);
+  delete settings.chatThinking;
+  console.log("✓ T16 思考强度两档(med=disabled+800, max=enabled+2000)");
+
+  console.log("\nALL 16 TESTS PASSED");
   process.exit(0);
 }
 

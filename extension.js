@@ -821,6 +821,12 @@ function requestCommentToCode(document, position, cancelToken) {
   const systemMsg = "你是一个代码生成器。根据注释描述的任务，直接输出实现代码。不要输出 markdown 代码块标记，不要解释——只要代码。";
   const userMsg = `文件上下文:\n${preceding}\n\n任务（根据注释）:\n${instruction}\n\n实现代码:`;
 
+  // 思考强度两档(2026-07 实测官方 API):
+  //   - 不传 thinking = 默认开思考, reasoning 先流式输出且计入 max_tokens
+  //   - med → 显式 disabled: 秒出, 实测 1 token vs 20+ token 推理开销
+  //   - max → 显式 enabled + max_tokens 提到 2000 补偿 reasoning 消耗
+  // 只作用于 chat 路径; FIM 裸补全端点实测免疫 thinking(本就不该思考, 要的是快)
+  const thinkMax = cfg.get("chatThinking") === "max";
   const body = JSON.stringify({
     model: cfg.get("model"),
     messages: [
@@ -828,9 +834,10 @@ function requestCommentToCode(document, position, cancelToken) {
       { role: "user", content: userMsg },
     ],
     stream: true,
-    max_tokens: cfg.get("multiLine") ? 800 : 400,
+    max_tokens: thinkMax ? 2000 : (cfg.get("multiLine") ? 800 : 400),
     temperature: 0,
     stop: ["\n\n\n"],
+    thinking: { type: thinkMax ? "enabled" : "disabled" },
   });
 
   statBump("requests");
@@ -1404,7 +1411,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.8.0 activated, debug logging on");
+  dbg("v1.9.0 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1578,14 +1585,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.8.0 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.9.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.8.0 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.9.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
