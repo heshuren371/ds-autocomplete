@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.9.1",
+  "version": "1.9.2",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -146,17 +146,17 @@
         },
         "dsAutocomplete.maxPrefixChars": {
           "type": "number",
-          "default": 2000,
+          "default": 8000,
           "minimum": 500,
           "maximum": 10000,
-          "description": "Max prefix characters sent to model"
+          "description": "Max prefix characters sent to model. 8000字符≈2000token(约200行代码); DeepSeek有prompt缓存,打字间前缀几乎不变,重复部分只收10%费用"
         },
         "dsAutocomplete.maxSuffixChars": {
           "type": "number",
-          "default": 1500,
+          "default": 4000,
           "minimum": 0,
           "maximum": 5000,
-          "description": "Max suffix characters sent to model"
+          "description": "Max suffix characters sent to model. 4000字符≈100行; 更大的下文让模型不重抄已有代码"
         },
         "dsAutocomplete.stopTokens": {
           "type": "array",

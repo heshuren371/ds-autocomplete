@@ -30,7 +30,7 @@
 ## 安装
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.1.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.2.vsix
 ```
 
 `Cmd+Shift+P` → `Reload Window`。
@@ -146,8 +146,8 @@ comment-to-code 的输出预算（`max_tokens`）：
 | `replacePartialWord` | `false` | 补全替换光标处半个词（**别开**——会破坏幽灵文跟随收缩） |
 | `triggerOnExplicit` | `true` | 手动触发也补全 |
 | `skipInString` | `false` | 字符串内跳过（**别开**——会杀掉 `print("hello` 这类最需要的补全） |
-| `maxPrefixChars` | `2000` | 发给模型的上文字符上限 |
-| `maxSuffixChars` | `1500` | 下文字符上限 |
+| `maxPrefixChars` | `8000` | 上文字符上限(≈200行,prompt缓存重复部分仅10%费用) |
+| `maxSuffixChars` | `4000` | 下文字符上限(≈100行,防模型重抄下文) |
 | `stopTokens` | `[]` | 额外停止序列 |
 | `enabledLanguages` | `["*"]` | 启用补全的语言 |
 | `disabledLanguages` | `[]` | 在此语言里关闭（优先级高于 enabled） |
@@ -158,7 +158,7 @@ comment-to-code 的输出预算（`max_tokens`）：
 ## 更新
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.1.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.2.vsix
 ```
 
 ---
