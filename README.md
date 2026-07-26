@@ -30,7 +30,7 @@
 ## 安装
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.3.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.0.vsix
 ```
 
 `Cmd+Shift+P` → `Reload Window`。
@@ -108,12 +108,20 @@ even_list = [     ← 灰字自动出现
 ## 更新
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.6.3.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.0.vsix
 ```
 
 ---
 
 ## 更新日志
+
+### v1.9.x
+- 🆕 **思考强度两档**：`med`(默认,关思考秒出省 ~95% token) / `max`(开思考,复杂注释质量更高)——实测官方 API 默认开思考白烧 token
+- 🆕 **最近编辑注入**：跨文件追踪刚改的行——改完 A 文件,B 文件补全新签名
+- 🆕 **作用域链 + 符号大纲**：长函数截断后模型也知道自己在哪、调函数不瞎编名字
+- 🆕 **后处理四件套**：去重 + 缩进重对齐 + 复读截断 + 括号配平
+- 🐛 修 `unitLen` 未声明(多行+缩进光标时幽灵文静默消失)
+- 🐛 修 6 个逻辑 bug(dedup 越界/chat 互斥/历史去重等)
 
 ### v1.6.x
 - 🆕 **comment-to-code**：注释后自动 chat API 生成实现
