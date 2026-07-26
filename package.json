@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -195,6 +195,11 @@
           "minimum": 0,
           "maximum": 128000,
           "description": "comment-to-code 输出上限覆盖。0=自动(med 8000 / max 16000)。max_tokens 是上限不是消费,短回答只花几个 token;实测官方 API 接受 40000"
+        },
+        "dsAutocomplete.chainedTab": {
+          "type": "boolean",
+          "default": true,
+          "description": "连锁补全(Cursor/Zed 同款): 接受一段补全后立刻触发下一段, tab-tab-tab 连续心流。关闭则接受后需自己打字触发"
         }
       }
     },

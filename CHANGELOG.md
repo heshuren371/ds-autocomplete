@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.4 (2026-07-26)
+
+- ✨ 连锁补全 `chainedTab`(Cursor Tab/Zed edit-prediction 同款): Tab 接受一段后 50ms 自动触发下一段, tab-tab-tab 连续心流。防抖+缓存兜底不打爆 API,可在设置关闭
+
 ## 1.9.3 (2026-07-26)
 
 - 🐛 前缀去重: 模型把光标前已写好的代码又输出一遍时裁掉——整行重复丢行(trim后精确匹配才裁), 行内重叠按字符裁(replacePartialWord=true 时跳过)

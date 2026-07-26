@@ -30,7 +30,7 @@
 ## 安装
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.3.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.4.vsix
 ```
 
 `Cmd+Shift+P` → `Reload Window`。
@@ -158,7 +158,7 @@ comment-to-code 的输出预算（`max_tokens`）：
 ## 更新
 
 ```bash
-code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.3.vsix
+code --install-extension https://github.com/heshuren371/ds-autocomplete/releases/latest/download/ds-autocomplete-1.9.4.vsix
 ```
 
 ---

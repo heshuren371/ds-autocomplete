@@ -578,7 +578,16 @@ async function run() {
   assert.strictEqual(requestCount, reqBefore18, "T18: remainder 必须即时给出, 不得发新 API 请求");
   console.log("✓ T18 Cmd+Right 竞态(edit期间光标事件不得清掉remainder)");
 
-  console.log("\nALL 18 TESTS PASSED");
+  // ── T19: 连锁补全 — Tab 接受后自动触发下一段(Cursor/Zed 同款) ──
+  settings.chainedTab = true;
+  cursorTriggerCount = 0;
+  await commandHandlers["dsAutocomplete.onAccept"]();
+  await new Promise((r) => setTimeout(r, 120)); // 触发在 50ms 的 setTimeout 里
+  assert(cursorTriggerCount >= 1,
+    `T19: 接受后必须自动触发下一段补全, got cursorTriggerCount=${cursorTriggerCount}`);
+  console.log("✓ T19 连锁补全(Tab接受后自动触发下一段)");
+
+  console.log("\nALL 19 TESTS PASSED");
   process.exit(0);
 }
 

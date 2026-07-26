@@ -1463,7 +1463,7 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.9.3 activated, debug logging on");
+  dbg("v1.9.4 activated, debug logging on");
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1495,6 +1495,19 @@ function activate(context) {
       _lastSuggestion = null;
       _ghostAnchor = null;
       dbg("ghost accepted (Tab via command callback — Tabby pattern)");
+
+      // ── 连锁补全(Cursor/Zed 的 tab-tab-tab 心流) ──
+      // 接受一段补全后, 光标落在新位置, 下一刻的上下文往往立刻可续——
+      // Cursor Tab 和 Zed 的 edit prediction 都靠"接受后立刻给下一段"
+      // 制造连续心流。VSCode 不会在 accept 后自动重触发, 手动补一枪。
+      // 防抖(200ms)和缓存会兜底, 连续按 Tab 不会打爆 API。
+      if (config().get("chainedTab")) {
+        setTimeout(() => {
+          // 用户若已开始打字/移动, 把触发权交给自然流程
+          if (_partialAcceptInFlight) return;
+          vscode.commands.executeCommand("editor.action.inlineSuggest.trigger");
+        }, 50);
+      }
     })
   );
 
@@ -1666,14 +1679,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.9.3 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.9.4 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.9.3 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.9.4 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
