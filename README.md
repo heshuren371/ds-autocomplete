@@ -2,7 +2,7 @@
 
 直连 DeepSeek API 的行内代码自动补全 VSCode 扩展。两种模式自动切换：代码中间用 **FIM 填空**，注释后用 **chat API 生成实现**。
 
-> 🆕 v1.9.0：思考强度两档 + 最近编辑注入 + 作用域链/符号大纲 + 后处理四件套
+> 🆕 v1.9.1：思考强度两档 + token 预算 8000/16000(可覆盖至 40000) + 最近编辑注入 + 作用域链/符号大纲 + 后处理四件套
 
 ---
 
@@ -89,19 +89,69 @@ even_list = [     ← 灰字自动出现
 
 ## 设置
 
+打开方式：`Cmd+,` → 搜 `dsAutocomplete`；或直接编辑 settings.json（键名前缀 `dsAutocomplete.`）。
+
+### 思考强度（comment-to-code 专用）
+
+写注释生成实现代码时，模型要不要"先想再写"：
+
+| 档 | 效果 | 适合 |
+|---|---|---|
+| `med`（默认） | 关闭思考——秒出，实测省 ~95% token | 日常 |
+| `max` | 开启思考——复杂逻辑质量更高，慢几秒 | 多步算法/复杂注释 |
+
+**切换方法**（二选一）：
+
+```jsonc
+// settings.json
+"dsAutocomplete.chatThinking": "max"   // 或 "med"(默认,删掉这行即恢复)
+```
+
+或 `Cmd+,` → 搜 `chatThinking` → 下拉选择。
+
+> 注意：只影响**注释→代码**（chat 路径）。普通代码补全（FIM）永远不走思考——实测 DeepSeek FIM 端点免疫该参数，inline 补全要的就是快。
+
+### 思考 token 上限
+
+comment-to-code 的输出预算（`max_tokens`）：
+
+| 档 | 默认预算 |
+|---|---|
+| `med` | 8000 |
+| `max` | 16000 |
+
+**手动覆盖**（想要更高直接填，比如 40000）：
+
+```jsonc
+"dsAutocomplete.chatMaxTokens": 40000   // 0 = 自动(8000/16000), 上限 128000
+```
+
+**关键认知：`max_tokens` 是上限不是消费。** 实测官方 API：预算填 40000 问 "1+1=?" 只花 5 个 token。拉高预算只是让长实现不被截断，短回答不多烧一分钱。
+
+### 全部配置项
+
 | 设置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `apiKey` | — | DeepSeek API key |
-| `model` | `deepseek-v4-flash` | 模型 |
-| `maxTokens` | `80` | 每次最大 token |
-| `temperature` | `0` | 确定性 |
-| `debounceMs` | `200` | 按键后等待 ms |
-| `multiLine` | `true` | 多行补全 |
-| `maxPrefixChars` | `2000` | 前缀最大字符 |
-| `maxSuffixChars` | `1500` | 后缀最大字符 |
-| `commentToCode` | `true` | 注释→代码模式 |
-| `disabledLanguages` | `[]` | 在此语言里关闭补全 |
+| `apiKey` | — | DeepSeek API key（[申请](https://platform.deepseek.com)） |
+| `model` | `deepseek-v4-flash` | 模型（flash / pro / coder） |
+| `chatThinking` | `med` | 思考强度：`med`关 / `max`开（仅 comment-to-code） |
+| `chatMaxTokens` | `0` | comment-to-code 输出上限覆盖，0=自动(8000/16000) |
+| `maxTokens` | `80` | FIM 单次补全最大 token |
+| `temperature` | `0` | 采样温度（0=确定性） |
+| `debounceMs` | `200` | 按键后等待 ms 再请求 |
+| `requestTimeoutMs` | `12000` | 请求超时 |
+| `multiLine` | `true` | 多行补全开关 |
+| `multiLineMode` | `always` | 多行策略 |
+| `commentToCode` | `true` | 注释→代码模式开关 |
+| `replacePartialWord` | `false` | 补全替换光标处半个词（**别开**——会破坏幽灵文跟随收缩） |
+| `triggerOnExplicit` | `true` | 手动触发也补全 |
+| `skipInString` | `false` | 字符串内跳过（**别开**——会杀掉 `print("hello` 这类最需要的补全） |
+| `maxPrefixChars` | `2000` | 发给模型的上文字符上限 |
+| `maxSuffixChars` | `1500` | 下文字符上限 |
+| `stopTokens` | `[]` | 额外停止序列 |
 | `enabledLanguages` | `["*"]` | 启用补全的语言 |
+| `disabledLanguages` | `[]` | 在此语言里关闭（优先级高于 enabled） |
+| `debug` | `false` | 日志输出到 Output 面板「DS Autocomplete」 |
 
 ---
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.1 (2026-07-26)
+
+- ✨ comment-to-code token 预算提升: med 800→8000, max 2000→16000(实测官方 API 接受 40000)
+- ✨ 新增 `chatMaxTokens` 覆盖项(0=自动,想要 40000 直接填,上限 128000)
+- 📝 max_tokens 是上限不是消费——短回答只花几个 token,长实现不再被截断
+
 ## 1.9.0 (2026-07-26)
 
 - ✨ 思考强度两档 `chatThinking`: `med`(默认,显式关思考) / `max`(开思考 + max_tokens 提到 2000)。实测官方 API **不传参数默认开思考**,reasoning 烧光 max_tokens 还拖慢 comment-to-code 数秒;med 档实测省 ~95% token。仅作用 chat 路径,FIM 端点实测免疫
