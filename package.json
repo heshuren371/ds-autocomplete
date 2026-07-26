@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -183,11 +183,18 @@
             "max"
           ],
           "enumDescriptions": [
-            "关闭思考 — comment-to-code 秒出, 不为看不见的推理烧 token (实测省 95% token)",
-            "开启思考 — 复杂注释生成质量更高, 但慢几秒且 reasoning 消耗 max_tokens"
+            "关闭思考 — comment-to-code 秒出, 不为看不见的推理烧 token (默认 8000 max_tokens)",
+            "开启思考 — 复杂注释生成质量更高, 慢几秒 (默认 16000 max_tokens 补偿推理消耗)"
           ],
           "default": "med",
           "description": "思考强度(仅作用于 comment-to-code chat 路径; FIM 补全端点实测免疫 thinking 参数)"
+        },
+        "dsAutocomplete.chatMaxTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 128000,
+          "description": "comment-to-code 输出上限覆盖。0=自动(med 8000 / max 16000)。max_tokens 是上限不是消费,短回答只花几个 token;实测官方 API 接受 40000"
         }
       }
     },

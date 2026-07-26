@@ -493,17 +493,25 @@ async function run() {
   await capturedProvider.provideInlineCompletionItems(docT16, new Position(2, 0), auto, cancelToken());
   assert(lastRequestBody && lastRequestBody.thinking && lastRequestBody.thinking.type === "disabled",
     `T16: med 档必须显式关思考, got thinking=${JSON.stringify(lastRequestBody?.thinking)}`);
-  assert.strictEqual(lastRequestBody.max_tokens, 800, "T16: med 档 max_tokens 保持 800");
+  assert.strictEqual(lastRequestBody.max_tokens, 8000, `T16: med 档 max_tokens 提到 8000, got ${lastRequestBody.max_tokens}`);
 
   settings.chatThinking = "max";
   const docT16b = new FakeDocument("x = 1\n# 计算平方\n");
   await capturedProvider.provideInlineCompletionItems(docT16b, new Position(2, 0), auto, cancelToken());
   assert(lastRequestBody.thinking.type === "enabled",
     `T16: max 档必须开思考, got ${JSON.stringify(lastRequestBody.thinking)}`);
-  assert.strictEqual(lastRequestBody.max_tokens, 2000,
-    `T16: max 档 max_tokens 必须提到 2000 补偿 reasoning, got ${lastRequestBody.max_tokens}`);
+  assert.strictEqual(lastRequestBody.max_tokens, 16000,
+    `T16: max 档 max_tokens 必须 16000 补偿 reasoning, got ${lastRequestBody.max_tokens}`);
+
+  // chatMaxTokens 覆盖档: 用户要 40000 就给 40000
+  settings.chatMaxTokens = 40000;
+  const docT16c = new FakeDocument("x = 1\n# 计算立方\n");
+  await capturedProvider.provideInlineCompletionItems(docT16c, new Position(2, 0), auto, cancelToken());
+  assert.strictEqual(lastRequestBody.max_tokens, 40000,
+    `T16: chatMaxTokens=40000 覆盖必须生效, got ${lastRequestBody.max_tokens}`);
+  delete settings.chatMaxTokens;
   delete settings.chatThinking;
-  console.log("✓ T16 思考强度两档(med=disabled+800, max=enabled+2000)");
+  console.log("✓ T16 思考强度两档(med=disabled+8000, max=enabled+16000, 覆盖=40000)");
 
   console.log("\nALL 16 TESTS PASSED");
   process.exit(0);
