@@ -41,6 +41,12 @@ class Position {
 class Range {
   constructor(start, end) { this.start = start; this.end = end; }
 }
+class Selection {
+  constructor(anchor, active) {
+    this.anchor = anchor; this.active = active;
+    this.isEmpty = anchor.line === active.line && anchor.character === active.character;
+  }
+}
 class FakeDocument {
   constructor(text, lang = "python") {
     this.text = text;
@@ -96,15 +102,24 @@ let docListeners = [];
 let insertedTexts = [];
 const commandHandlers = {};
 
+let statusBarText = "";
+let infoMsgChoice = null;
+let appliedEdit = null;
 const mockVscode = {
   Position,
   Range,
+  Selection,
   InlineCompletionTriggerKind: { Automatic: 0, Explicit: 1 },
   InlineCompletionItem: class {
     constructor(text, range, command) { this.insertText = text; this.range = range; this.command = command; }
   },
   StatusBarAlignment: { Right: 2 },
+  WorkspaceEdit: class {
+    constructor() { this.deleted = null; }
+    delete(uri, range) { this.deleted = [uri, range]; }
+  },
   workspace: {
+    applyEdit: async (e) => { appliedEdit = e; return true; },
     getConfiguration: () => ({ get: (k) => settings[k], update: async () => {} }),
     onDidChangeTextDocument: (fn) => { docListeners.push(fn); return { dispose() {} }; },
     onDidChangeConfiguration: () => ({ dispose() {} }),
@@ -119,10 +134,10 @@ const mockVscode = {
   window: {
     createStatusBarItem: () => ({
       show() {}, dispose() {},
-      set text(v) {}, set command(v) {}, set tooltip(v) {},
+      set text(v) { statusBarText = v; }, set command(v) {}, set tooltip(v) {},
     }),
     showQuickPick: async () => null,
-    showInformationMessage: async () => null,
+    showInformationMessage: async () => infoMsgChoice,
     showWarningMessage: async () => null,
     activeTextEditor: null,
     onDidChangeTextEditorSelection: (fn) => { selectionListeners.push(fn); return { dispose() {} }; },
@@ -148,8 +163,12 @@ const mockHttps = {
       res.statusCode = 200;
       process.nextTick(() => {
         cb(res);
-        const c1 = `data: ${JSON.stringify({ choices: [{ text: sseResponseText.slice(0, 3) }] })}\n\n`;
-        const c2 = `data: ${JSON.stringify({ choices: [{ text: sseResponseText.slice(3) }] })}\n\ndata: [DONE]\n\n`;
+        // 同时给 FIM 形态(text)和 chat 形态(delta.content)——两条解析路径都能吃到。
+        // 此前只有 text, chat 路径 delta.content 永远空串, T16 只断言请求体没暴露,
+        // T23 全局编辑预测是第一个真消费 chat 响应内容的测试。
+        const mk = (s) => JSON.stringify({ choices: [{ text: s, delta: { content: s } }] });
+        const c1 = `data: ${mk(sseResponseText.slice(0, 3))}\n\n`;
+        const c2 = `data: ${mk(sseResponseText.slice(3))}\n\ndata: [DONE]\n\n`;
         res.emit("data", Buffer.from(c1));
         res.emit("data", Buffer.from(c2));
       });
@@ -656,7 +675,125 @@ async function run() {
   delete settings.wholeFileMaxChars;
   console.log("✓ T22 全文件模式(关=截断≤100, 开=全量>300)");
 
-  console.log("\nALL 22 TESTS PASSED");
+  // ── T23: 全局编辑预测(第二层, NES 完全体) — 预测任意位置编辑+跳转+range替换 ──
+  settings.commentToCode = false;
+  sseResponseText = JSON.stringify({
+    old: "total = 0",
+    new: "total = 1\nprint(total)",
+    reason: "计数应从1开始",
+  });
+  const docT23 = new FakeDocument("total = 0\nx = 5\n");
+  for (const fn of docListeners) {
+    fn({ document: docT23, contentChanges: [{ text: "total = 0", range: { start: new Position(0, 0), end: new Position(0, 9) } }] });
+  }
+  mockVscode.window.activeTextEditor = {
+    document: docT23,
+    selection: { active: new Position(2, 0), isEmpty: true },
+    revealRange() {},
+  };
+  statusBarText = "";
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  // 请求体: JSON mode + 最近编辑进 prompt
+  assert(lastRequestBody.response_format?.type === "json_object",
+    `T23: nextEdit 必须开 JSON mode, got ${JSON.stringify(lastRequestBody.response_format)}`);
+  assert(lastRequestBody.messages[1].content.includes("第1行") &&
+         lastRequestBody.messages[1].content.includes("total = 0"),
+    "T23: 最近编辑必须进 prompt");
+  // 光标跳到 old 末尾(0:9), reason 上状态栏
+  assert(mockVscode.window.activeTextEditor.selection.active.line === 0 &&
+         mockVscode.window.activeTextEditor.selection.active.character === 9,
+    `T23: 光标必须跳到 old 末尾(0:9), got ${JSON.stringify(mockVscode.window.activeTextEditor.selection.active)}`);
+  assert(statusBarText.includes("计数应从1开始"), `T23: reason 必须上状态栏, got ${statusBarText}`);
+  // provider 吐出预计算项: range 覆盖第 0 行
+  const items23 = await capturedProvider.provideInlineCompletionItems(docT23, new Position(0, 9), auto, cancelToken());
+  assert(items23[0] && items23[0].range && items23[0].range.start.line === 0,
+    `T23: nextEdit 项必须带 range 覆盖 old, got ${JSON.stringify(items23[0]?.range)}`);
+  assert.strictEqual(String(items23[0].insertText), "total = 1\nprint(total)",
+    `T23: insertText 必须是 new 原文, got ${JSON.stringify(items23[0].insertText)}`);
+
+  // 幻觉防护: old 不在文件里 → 拒展示, 不设 _pendingNextEdit
+  sseResponseText = JSON.stringify({ old: "def nonexistent():", new: "pass", reason: "x" });
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  assert(statusBarText.includes("已拒展示"), `T23: 幻觉 old 必须拒展示, got ${statusBarText}`);
+  console.log("✓ T23 全局编辑预测(JSON mode+跳转+range替换+幻觉拒展示)");
+
+  // ── T24: nextEdit 大文件偏移重定基 + 空响应状态复位(源代码自查抓的两个坑) ──
+  // 坑1: >60000 字符截断后, locateOldText 返回的是截断串内偏移,
+  //       直接 document.positionAt() 会偏 baseOffset——跳转必错。
+  // 构造: 25000 字符填充 + "total = 0"(真实偏移25000) + 40000 字符填充,
+  //       光标在 40000 → baseOffset=10000, 不重定基会跳到 15009 而非 25009。
+  const pad1 = "// xxxxxxxxxxxxxxxxxxxxxx\n".repeat(1000); // 25000 字符
+  const pad2 = "// xxxxxxxxxxxxxxxxxxxxxx\n".repeat(1600); // 40000 字符
+  const docT24 = new FakeDocument(pad1 + "total = 0\n" + pad2);
+  sseResponseText = JSON.stringify({ old: "total = 0", new: "total = 1", reason: "r" });
+  mockVscode.window.activeTextEditor = {
+    document: docT24,
+    selection: { active: docT24.positionAt(40000), isEmpty: true },
+    revealRange() {},
+  };
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  const expected24 = docT24.positionAt(pad1.length + 9); // "total = 0" 真实末尾(不硬编码 pad 长度)
+  const got24 = mockVscode.window.activeTextEditor.selection.active;
+  assert(got24.line === expected24.line && got24.character === expected24.character,
+    `T24: 大文件跳转必须重定基到 ${JSON.stringify(expected24)}, got ${JSON.stringify(got24)}`);
+  const items24 = await capturedProvider.provideInlineCompletionItems(docT24, expected24, auto, cancelToken());
+  assert(items24[0] && items24[0].range && items24[0].range.start.line === expected24.line,
+    `T24: 大文件 nextEdit range 必须在真实行, got ${JSON.stringify(items24[0]?.range)}`);
+
+  // 坑2: 空响应 → 状态栏不得卡死在"预测中"spinner
+  sseResponseText = "";
+  statusBarText = "";
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  assert(statusBarText.includes("空响应"),
+    `T24: 空响应必须复位状态栏, got ${JSON.stringify(statusBarText)}`);
+  console.log("✓ T24 大文件偏移重定基+空响应状态复位");
+
+  // ── T25: nextEdit 幂等供给 — 双重触发供同一项, 光标挪走才作废(防幽灵文被顶掉) ──
+  sseResponseText = JSON.stringify({ old: "total = 0", new: "total = 1", reason: "r" });
+  const docT25 = new FakeDocument("total = 0\nx = 5\n");
+  mockVscode.window.activeTextEditor = {
+    document: docT25,
+    selection: { active: new Position(1, 0), isEmpty: true },
+    revealRange() {},
+  };
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  // 同一位置连续触发两次(模拟 自动+显式 双触发): 必须供同一项, 不得落入 FIM
+  const a25 = await capturedProvider.provideInlineCompletionItems(docT25, new Position(0, 9), auto, cancelToken());
+  const b25 = await capturedProvider.provideInlineCompletionItems(docT25, new Position(0, 9), auto, cancelToken());
+  assert(a25[0] && b25[0] && String(b25[0].insertText) === "total = 1",
+    `T25: 重复触发必须重复供预计算项, got ${JSON.stringify(b25[0]?.insertText)}`);
+  assert(b25[0].range && b25[0].range.start.line === 0, "T25: 第二次供给仍须带 range");
+  // 光标挪走 → 作废, 不再供给预计算项(落入普通流程, 不挂即可)
+  await capturedProvider.provideInlineCompletionItems(docT25, new Position(1, 6), auto, cancelToken());
+  const c25 = await capturedProvider.provideInlineCompletionItems(docT25, new Position(0, 9), auto, cancelToken());
+  assert(!c25[0] || String(c25[0].insertText) !== "total = 1" || !c25[0].range,
+    "T25: 光标挪走后预计算项必须作废");
+  console.log("✓ T25 幂等供给(双触发同项/挪走作废)");
+
+  // ── T26: 删除类预测 — 确认后整行删除(含换行不留空行)/忽略不动文件 ──
+  sseResponseText = JSON.stringify({ old: "ewyuqwweh", new: "", reason: "无意义内容" });
+  const docT26 = new FakeDocument("x = 1\newyuqwweh\ny = 2\n");
+  mockVscode.window.activeTextEditor = {
+    document: docT26,
+    selection: { active: new Position(2, 0), isEmpty: true },
+    revealRange() {},
+  };
+  infoMsgChoice = "删除";
+  appliedEdit = null;
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  assert(appliedEdit && appliedEdit.deleted, "T26: 点删除必须 applyEdit");
+  const [dUri26, dRange26] = appliedEdit.deleted;
+  assert(dRange26.start.line === 1 && dRange26.start.character === 0,
+    `T26: 删除起点须为行首, got ${JSON.stringify(dRange26.start)}`);
+  assert(dRange26.end.line === 2 && dRange26.end.character === 0,
+    `T26: 删除终点须含换行到下行首(不留空行), got ${JSON.stringify(dRange26.end)}`);
+  infoMsgChoice = null;
+  appliedEdit = null;
+  await commandHandlers["dsAutocomplete.nextEdit"]();
+  assert(!appliedEdit, "T26: 忽略不得 applyEdit");
+  console.log("✓ T26 删除类预测(一键删除整行/忽略不动)");
+
+  console.log("\nALL 26 TESTS PASSED");
   process.exit(0);
 }
 

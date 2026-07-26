@@ -2,7 +2,7 @@
   "name": "ds-autocomplete",
   "displayName": "DS Autocomplete",
   "description": "DeepSeek V4 inline code autocomplete — zero quota, direct FIM endpoint. 中文母语优化版。",
-  "version": "1.9.5",
+  "version": "1.10.0",
   "publisher": "local",
   "icon": "assets/icon.png",
   "repository": {
@@ -225,6 +225,10 @@
       {
         "command": "dsAutocomplete.showStats",
         "title": "DS Autocomplete: Show Info"
+      },
+      {
+        "command": "dsAutocomplete.nextEdit",
+        "title": "DS Autocomplete: 预测下一处编辑(全局)"
       }
     ],
     "keybindings": [
@@ -239,6 +243,12 @@
         "key": "ctrl+down",
         "mac": "cmd+down",
         "when": "editorTextFocus && inlineSuggestionVisible && !editorReadonly"
+      },
+      {
+        "command": "dsAutocomplete.nextEdit",
+        "key": "ctrl+alt+e",
+        "mac": "ctrl+alt+e",
+        "when": "editorTextFocus"
       }
     ]
   }

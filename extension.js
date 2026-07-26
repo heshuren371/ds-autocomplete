@@ -942,11 +942,7 @@ function requestFIM(prompt, suffix, cancelToken) {
 
 function requestCommentToCode(document, position, cancelToken) {
   const cfg = config();
-  const key = cfg.get("apiKey");
-  if (!key) return Promise.reject(new Error("No API key"));
-
-  // Kill any in-flight FIM request — chat API takes over
-  if (_activeRequest) { _activeRequest.destroy(); _activeRequest = null; }
+  if (!cfg.get("apiKey")) return Promise.reject(new Error("No API key"));
 
   const full = document.getText();
   const offset = document.offsetAt(position);
@@ -963,16 +959,30 @@ function requestCommentToCode(document, position, cancelToken) {
 
   const systemMsg = "你是一个代码生成器。根据注释描述的任务，直接输出实现代码。不要输出 markdown 代码块标记，不要解释——只要代码。";
   const userMsg = `文件上下文:\n${preceding}\n\n任务（根据注释）:\n${instruction}\n\n实现代码:`;
+  return requestChat(systemMsg, userMsg, cancelToken);
+}
 
-  // 思考强度两档(2026-07 实测官方 API):
-  //   - 不传 thinking = 默认开思考, reasoning 先流式输出且计入 max_tokens
-  //   - med → 显式 disabled: 秒出, 实测 1 token vs 20+ token 推理开销
-  //   - max → 显式 enabled + 更高预算补偿 reasoning 消耗
-  // max_tokens 是上限不是消费——短回答只花几个 token, 实测 40000 也照收
-  // 只作用于 chat 路径; FIM 裸补全端点实测免疫 thinking(本就不该思考, 要的是快)
+// ══════════════════════════════════════════════════════════════════════
+// chat 通用请求(SSE 流式) — comment-to-code 与全局编辑预测共用
+// 思考强度两档(2026-07 实测官方 API):
+//   - 不传 thinking = 默认开思考, reasoning 先流式输出且计入 max_tokens
+//   - med → 显式 disabled: 秒出, 实测 1 token vs 20+ token 推理开销
+//   - max → 显式 enabled + 更高预算补偿 reasoning 消耗
+// max_tokens 是上限不是消费——短回答只花几个 token, 实测 40000 也照收
+// FIM 裸补全端点免疫 thinking, 不走这里
+// opts.jsonMode: 加 response_format json_object(官方要求 prompt 含 "json")
+// ══════════════════════════════════════════════════════════════════════
+function requestChat(systemMsg, userMsg, cancelToken, opts = {}) {
+  const cfg = config();
+  const key = cfg.get("apiKey");
+  if (!key) return Promise.reject(new Error("No API key"));
+
+  // Kill any in-flight FIM request — chat API takes over
+  if (_activeRequest) { _activeRequest.destroy(); _activeRequest = null; }
+
   const thinkMax = cfg.get("chatThinking") === "max";
   const chatBudget = cfg.get("chatMaxTokens") || (thinkMax ? 16000 : 8000);
-  const body = JSON.stringify({
+  const bodyObj = {
     model: cfg.get("model"),
     messages: [
       { role: "system", content: systemMsg },
@@ -983,7 +993,9 @@ function requestCommentToCode(document, position, cancelToken) {
     temperature: 0,
     stop: ["\n\n\n"],
     thinking: { type: thinkMax ? "enabled" : "disabled" },
-  });
+  };
+  if (opts.jsonMode) bodyObj.response_format = { type: "json_object" };
+  const body = JSON.stringify(bodyObj);
 
   statBump("requests");
 
@@ -1060,6 +1072,155 @@ function requestCommentToCode(document, position, cancelToken) {
     req.write(body);
     req.end();
   });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 全局编辑预测(第二层, Cursor NES 同款) — 预测文件任意位置的下一个编辑
+// ══════════════════════════════════════════════════════════════════════
+// 与光标处补全的区别: 补全问"这里接着写什么", 本功能问"整个文件下一步该改哪"。
+// 输入: 最近编辑历史(P3) + 全文件(1M 上下文+缓存 2% 价, 全量喂; 超大文件绕光标截)
+// 输出协议: {"old": "文件里逐字存在的原文", "new": "新内容", "reason": "一句话"}
+//   — 用 old 在文件里定位, 不信模型给的行号(会幻觉); old 找不到就拒展示
+// 展示: 光标跳过去 + range 替换幽灵文, Tab 接受 / Esc 拒绝 — 与改正模式同一 UX
+// 手动触发(命令/快捷键), 每次按键一次 chat 调用, 不打爆 API
+
+let _pendingNextEdit = null; // {uri, range, insertText} 预计算的编辑, provider 直接吐出
+
+// old 文本在文件中定位。逐字优先(多处出现取离光标最近); 失败按行 trim 模糊匹配
+// (模型可能丢缩进)。返回 {start, end} 字符偏移; 找不到返回 null。
+function locateOldText(full, old, anchorOffset) {
+  const hits = [];
+  let i = full.indexOf(old);
+  while (i >= 0) { hits.push({ start: i, end: i + old.length }); i = full.indexOf(old, i + 1); }
+  if (hits.length === 0) {
+    const oldLines = old.split("\n").map((l) => l.trim()).filter((l) => l);
+    if (oldLines.length === 0) return null;
+    const docLines = full.split("\n");
+    const offsets = [0];
+    for (let r = 0; r < docLines.length; r++) offsets.push(offsets[r] + docLines[r].length + 1);
+    outer:
+    for (let s = 0; s + oldLines.length <= docLines.length; s++) {
+      for (let j = 0; j < oldLines.length; j++) {
+        if (docLines[s + j].trim() !== oldLines[j]) continue outer;
+      }
+      // 命中: 覆盖整行(含缩进), 替换时把缩进控制权交给模型的 new
+      hits.push({ start: offsets[s], end: offsets[s + oldLines.length - 1] + docLines[s + oldLines.length - 1].length });
+      break; // 模糊匹配只取第一个——多义性高, 宁缺毋滥
+    }
+  }
+  if (hits.length === 0) return null;
+  hits.sort((a, b) => Math.abs(a.start - anchorOffset) - Math.abs(b.start - anchorOffset));
+  return hits[0];
+}
+
+async function nextEditCommand() {
+  // 手动命令低频, 步骤日志无条件写输出面板——排查"按了没反应"时不用开 debug
+  const log = (m) => outputChannel().appendLine(`[nextEdit] ${m}`);
+  log("命令触发");
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    log("中止: 无活动编辑器(焦点不在代码页?)");
+    vscode.window.showInformationMessage("DS: 请先把光标点进代码编辑器, 再按 Ctrl+Alt+E");
+    return;
+  }
+  const document = editor.document;
+  const uri = document.uri.toString();
+  log(`目标文件: ${document.uri.fsPath || uri}`);
+
+  // 收集本文件最近编辑(P3 缓冲), 模型靠它判断"用户正在干什么"
+  const now = Date.now();
+  const edits = _recentEdits.filter((e) => e.uri === uri && now - e.ts < RECENT_EDITS_TTL_MS);
+  const editsText = edits.length
+    ? edits.map((e, i) => `${i + 1}. [第${e.line + 1}行] ${e.text}`).join("\n")
+    : "(无记录——按文件现状直接预测)";
+  const fileName = document.uri.fsPath ? path.basename(document.uri.fsPath) : "untitled";
+  // 超大文件绕光标截取(手动触发也要控制单次成本)。
+  // ⚠ 截断后所有偏移都是"截断串内偏移", 用回文档必须加 baseOffset 重定基——
+  //   自查抓到的坑: 不重定基时, >60000 字符文件的跳转位置必错(偏 baseOffset)。
+  let full = document.getText();
+  let baseOffset = 0;
+  if (full.length > 60000) {
+    const cur = document.offsetAt(editor.selection.active);
+    baseOffset = Math.max(0, cur - 30000);
+    full = full.slice(baseOffset, cur + 30000);
+  }
+
+  const systemMsg = "你是代码编辑预测器。根据用户最近的编辑和文件内容,预测用户下一步最可能要做的修改。只输出 JSON,不要解释。";
+  const userMsg = `文件: ${fileName}
+
+最近编辑(按时间顺序):
+${editsText}
+
+文件全文:
+${full}
+
+预测下一步最可能的修改,严格输出 JSON(不要 markdown 代码块):
+{"old": "要被替换的现有代码原文,必须在文件全文里逐字出现", "new": "替换后的新代码", "reason": "一句话中文原因"}
+old 必须逐字存在于文件(含缩进),可以跨行;没有值得预测的修改就输出 {"old": "", "new": "", "reason": "无"}。`;
+
+  showStatus("DS: 预测下一处编辑…");
+  log(`发送请求(全文 ${full.length} 字符, 最近编辑 ${edits.length} 条)`);
+  try {
+    const raw = await requestChat(systemMsg, userMsg, null, { jsonMode: true });
+    // 空响应(流没吐内容)也要复位状态栏——否则 spinner 永远卡在"预测中"(自查抓的坑)
+    log(`收到响应 ${raw ? raw.length : 0} 字符`);
+    if (!raw) { showStatus("DS: 空响应", "$(warning)", 4000); return; }
+    // JSON 提取: 模型偶尔包一层废话, 抠出第一个 {...}
+    let pred = null;
+    try { pred = JSON.parse(raw.trim()); } catch {
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) { try { pred = JSON.parse(m[0]); } catch {} }
+    }
+    if (!pred || !pred.old) { log(`无可预测编辑: ${raw.slice(0, 80)}`); showStatus("DS: 暂无可预测的编辑", "$(info)", 4000); return; }
+
+    const anchor = document.offsetAt(editor.selection.active);
+    // anchor/loc 都在截断串坐标系里比较, 用回文档时统一 +baseOffset
+    const loc = locateOldText(full, String(pred.old), anchor - baseOffset);
+    if (!loc) { log(`原文定位失败(幻觉?): old=${String(pred.old).slice(0, 50)}`); showStatus("DS: 预测原文不在文件中(已拒展示,防幻觉)", "$(warning)", 5000); return; }
+
+    const startPos = document.positionAt(loc.start + baseOffset);
+    const endPos = document.positionAt(loc.end + baseOffset);
+    const range = new vscode.Range(startPos, endPos);
+    const newText = String(pred.new || "");
+    // 纯删除预测(new 为空): 空幽灵文什么都渲染不出来(实测"没反应"的元凶之一)。
+    // 改走可点击通知: 用户点"删除"才动手, 且 old 覆盖整行时连换行符一起吃,
+    // 不留空行。预览优先原则不变——没有确认绝不动文件。
+    if (!newText.trim()) {
+      log(`删除类预测: 建议删除「${String(pred.old).slice(0, 40)}」@line${startPos.line + 1}, 等待用户确认`);
+      showStatus(`DS: 模型建议删除第${startPos.line + 1}行`, "$(trash)", 8000);
+      const choice = await vscode.window.showInformationMessage(
+        `DS: 模型建议删除第${startPos.line + 1}行「${String(pred.old).slice(0, 30)}」`,
+        "删除", "忽略"
+      );
+      if (choice !== "删除") { log("用户忽略删除"); return; }
+      // old 若覆盖整行内容(前后只剩空白), 把行尾换行也吞掉, 删完不留空行
+      const fullNow = document.getText();
+      const lineStartOff = document.offsetAt(new vscode.Position(startPos.line, 0));
+      const brk = fullNow.indexOf("\n", loc.end + baseOffset);
+      const before = fullNow.slice(lineStartOff, loc.start + baseOffset);
+      const after = fullNow.slice(loc.end + baseOffset, brk < 0 ? fullNow.length : brk);
+      let delRange = range;
+      if (!before.trim() && !after.trim() && brk >= 0) {
+        delRange = new vscode.Range(new vscode.Position(startPos.line, 0), document.positionAt(brk + 1));
+      }
+      const edit = new vscode.WorkspaceEdit();
+      edit.delete(document.uri, delRange);
+      await vscode.workspace.applyEdit(edit);
+      log(`已删除 line${startPos.line + 1}(整行=${delRange !== range})`);
+      showStatus("DS: 已删除", "$(check)", 3000);
+      return;
+    }
+    _pendingNextEdit = { uri, range, insertText: newText };
+    // 跳到目标位置: 光标放 old 末尾, 幽灵文 range 覆盖 old, Tab 即替换
+    editor.selection = new vscode.Selection(endPos, endPos);
+    editor.revealRange(range);
+    showStatus("DS: " + String(pred.reason || "下一处编辑"), "$(lightbulb)", 6000);
+    log(`跳转 line=${startPos.line + 1}, new=${String(pred.new || "").slice(0, 50)}`);
+    await vscode.commands.executeCommand("editor.action.inlineSuggest.trigger");
+  } catch (e) {
+    log(`失败: ${e.message}`);
+    showStatus("DS: 预测失败 " + String(e.message).slice(0, 40), "$(error)", 6000);
+  }
 }
 
 async function evaluateFIM(prompt, suffix, cancelToken) {
@@ -1248,6 +1409,25 @@ class DeepSeekCompletionProvider {
 
     const kind = context.triggerKind === vscode.InlineCompletionTriggerKind.Explicit ? "Explicit" : "Auto";
     dbg(`call ${kind} @${position.line}:${position.character} lastSug=${_lastSuggestion ? _lastSuggestion.text.length + "c" : "null"}`);
+
+    // 全局编辑预测的预计算结果: 最高优先级直接吐出, 不走任何其他分支。
+    // ⚠ 不一供即弃: 跳转时的光标移动会自动触发一次补全, 命令又显式触发一次——
+    //   若第一次就消费掉, 第二次落入普通 FIM 流程会把预计算幽灵文顶掉/清空
+    //   (实测"按了没反应"的元凶之一)。光标还在原地就重复供同一项, 挪走才作废。
+    if (_pendingNextEdit) {
+      const ne = _pendingNextEdit;
+      if (ne.uri !== document.uri.toString() ||
+          position.line !== ne.range.end.line ||
+          position.character !== ne.range.end.character) {
+        _pendingNextEdit = null; // 换了文件或光标挪走 → 作废
+      } else {
+        dbg(`nextEdit serve range=${ne.range.start.line}-${ne.range.end.line}`);
+        outputChannel().appendLine(`[nextEdit] 已供给幽灵文 @line${ne.range.start.line + 1}: ${ne.insertText.slice(0, 40).replace(/\n/g, "⏎")}`);
+        startRequest(ne.insertText, document, ne.range.end);
+        setGhostAnchor(document, ne.insertText, ne.range.end);
+        return [makeCompletionItem(ne.insertText, ne.range)];
+      }
+    }
 
     if (context.triggerKind === vscode.InlineCompletionTriggerKind.Explicit && !cfg.get("triggerOnExplicit")) {
       return [];
@@ -1563,7 +1743,10 @@ function activate(context) {
   loadStats();
   initStatusBar();
   outputChannel(); // eager: channel must exist in the Output dropdown immediately
-  dbg("v1.9.5 activated, debug logging on");
+  // ⚠ debug 开关必须启动时读一次——此前只在 onDidChangeConfiguration 里赋值,
+  //   "启动前就是 true"的场景(最常见)变化事件不触发, dbg 一辈子哑火。
+  _debugEnabled = !!config().get("debug");
+  dbg(`v1.10.0 activated, debug=${_debugEnabled}`);
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("dsAutocomplete.debug")) {
@@ -1588,6 +1771,10 @@ function activate(context) {
       vscode.languages.registerInlineCompletionItemProvider(sel, provider)
     );
   }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("dsAutocomplete.nextEdit", nextEditCommand)
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("dsAutocomplete.onAccept", async () => {
@@ -1779,14 +1966,14 @@ function activate(context) {
       const rate = s.shown > 0 ? Math.round((s.accepted / s.shown) * 100) : 0;
       const cacheRate = s.requests > 0 ? Math.round((s.cacheHits / (s.requests + s.cacheHits)) * 100) : 0;
       vscode.window.showInformationMessage(
-        `DS Autocomplete v1.9.5 · ${config().get("model")}\n` +
+        `DS Autocomplete v1.10.0 · ${config().get("model")}\n` +
           `补全 ${s.shown} 次 · 接受 ${s.accepted} (${rate}%) · 缓存命中 ${s.cacheHits} (${cacheRate}%)\n` +
           `API 请求 ${s.requests} 次 · 重试 ${s.retries} 次 · 约 ${s.tokensUsed} tokens`
       );
     })
   );
 
-  console.log(`[DS Autocomplete] v1.9.5 activated — ${langs.join(", ")}`);
+  console.log(`[DS Autocomplete] v1.10.0 activated — ${langs.join(", ")}`);
 
   // No API key? Prompt once
   if (!config().get("apiKey")) {
